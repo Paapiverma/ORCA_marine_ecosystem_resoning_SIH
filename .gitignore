@@ -5,3 +5,7 @@ __pycache__/
 *.nc.*
 *.csv
 *.parquet
+
+# Allow committed sample datasets
+!sample_data/*.parquet
+!sample_data/*.csv

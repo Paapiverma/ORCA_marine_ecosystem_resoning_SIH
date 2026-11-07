@@ -1,12 +1,18 @@
 # run_forecast_pipeline.py
 import datetime
 import os
+from pathlib import Path
 import copernicusmarine
 import xarray as xr
 import pandas as pd
 import numpy as np
 import joblib
 from sklearn.cluster import DBSCAN
+
+# Base directories relative to script
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+MODEL_DIR = PROJECT_ROOT / 'model_artifacts'
 
 # -------------------------------------------------------------
 # 1. Setup Dates & Parameters
@@ -21,8 +27,8 @@ MIN_LON, MAX_LON = 65.0, 77.5
 MIN_LAT, MAX_LAT = 8.0, 22.0
 
 datasets_to_fetch = [
-    {"id": "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m", "vars": ["thetao"], "file": f"temp_thetao_{date_str}.nc"},
-    {"id": "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m", "vars": ["uo", "vo"], "file": f"temp_cur_{date_str}.nc"}
+    {"id": "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m", "vars": ["thetao"], "file": str(BASE_DIR / f"temp_thetao_{date_str}.nc")},
+    {"id": "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m", "vars": ["uo", "vo"], "file": str(BASE_DIR / f"temp_cur_{date_str}.nc")}
 ]
 
 downloaded_files = []
@@ -79,7 +85,7 @@ df_forecast['current_speed'] = np.sqrt(df_forecast['uo']**2 + df_forecast['vo']*
 df_forecast['SSTA'] = df_forecast['thetao'] - df_forecast['thetao'].mean()
 df_forecast['sla_anomaly'] = 0.0
 
-csv_filename = f"forecast_processed_{date_str}.csv"
+csv_filename = BASE_DIR / f"forecast_processed_{date_str}.csv"
 df_forecast.to_csv(csv_filename, index=False)
 print(f" Saved: {csv_filename} ({len(df_forecast)} grid coordinates)")
 
@@ -88,8 +94,16 @@ print(f" Saved: {csv_filename} ({len(df_forecast)} grid coordinates)")
 # -------------------------------------------------------------
 print("🧠 [3/3] Running ORCA Model Inference & Event Clustering...")
 
-iso_forest = joblib.load('orca_isolation_forest.joblib')
-model_features = joblib.load('orca_features.joblib')
+iso_forest_path = BASE_DIR / 'orca_isolation_forest.joblib'
+if not iso_forest_path.exists():
+    iso_forest_path = MODEL_DIR / 'orca_isolation_forest.joblib'
+
+features_path = BASE_DIR / 'orca_features.joblib'
+if not features_path.exists():
+    features_path = MODEL_DIR / 'orca_features.joblib'
+
+iso_forest = joblib.load(iso_forest_path)
+model_features = joblib.load(features_path)
 
 for col in model_features:
     if col not in df_forecast.columns:
@@ -149,8 +163,8 @@ df_forecast['event_id'] = event_id_series
 forecast_events_df = pd.DataFrame(event_records)
 
 # Export UI Artifacts
-df_forecast.to_parquet('latest_forecast_predictions.parquet', compression='snappy')
-forecast_events_df.to_csv('latest_forecast_events.csv', index=False)
+df_forecast.to_parquet(BASE_DIR / 'latest_forecast_predictions.parquet', compression='snappy')
+forecast_events_df.to_csv(BASE_DIR / 'latest_forecast_events.csv', index=False)
 
 print("\n Forecast Pipeline Completed Successfully!")
 print(df_forecast['marine_health_state'].value_counts())

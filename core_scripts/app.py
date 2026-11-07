@@ -22,24 +22,50 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+from pathlib import Path
+
+# Base directories relative to script
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+SAMPLE_DATA_DIR = PROJECT_ROOT / 'sample_data'
+
 # -------------------------------------------------------------
 # 2. Cached Data Loaders
 # -------------------------------------------------------------
 @st.cache_data
 def load_historical_data():
-    df = pd.read_parquet('orca_processed_ocean_data.parquet')
+    df_path = None
+    for candidate in [BASE_DIR / 'orca_processed_ocean_data.parquet', PROJECT_ROOT / 'orca_processed_ocean_data.parquet']:
+        if candidate.exists():
+            df_path = candidate
+            break
+    if df_path is None:
+        df_path = SAMPLE_DATA_DIR / 'orca_sample_ocean_data.parquet'
+
+    events_path = None
+    for candidate in [BASE_DIR / 'orca_detected_events_2022_2025.csv', PROJECT_ROOT / 'orca_detected_events_2022_2025.csv']:
+        if candidate.exists():
+            events_path = candidate
+            break
+    if events_path is None:
+        events_path = SAMPLE_DATA_DIR / 'orca_sample_detected_events.csv'
+
+    df = pd.read_parquet(df_path)
     df['time'] = pd.to_datetime(df['time']).dt.date
-    events = pd.read_csv('orca_detected_events_2022_2025.csv')
+    events = pd.read_csv(events_path)
     events['time'] = pd.to_datetime(events['time']).dt.date
     return df, events
 
 def load_forecast_data():
-    if os.path.exists('latest_forecast_predictions.parquet') and os.path.exists('latest_forecast_events.csv'):
-        df_fc = pd.read_parquet('latest_forecast_predictions.parquet')
-        df_fc['time'] = pd.to_datetime(df_fc['time']).dt.date
-        events_fc = pd.read_csv('latest_forecast_events.csv')
-        events_fc['time'] = pd.to_datetime(events_fc['time']).dt.date
-        return df_fc, events_fc
+    for base in [BASE_DIR, PROJECT_ROOT]:
+        fc_parquet = base / 'latest_forecast_predictions.parquet'
+        fc_csv = base / 'latest_forecast_events.csv'
+        if fc_parquet.exists() and fc_csv.exists():
+            df_fc = pd.read_parquet(fc_parquet)
+            df_fc['time'] = pd.to_datetime(df_fc['time']).dt.date
+            events_fc = pd.read_csv(fc_csv)
+            events_fc['time'] = pd.to_datetime(events_fc['time']).dt.date
+            return df_fc, events_fc
     return None, None
 
 df_hist, events_hist = load_historical_data()

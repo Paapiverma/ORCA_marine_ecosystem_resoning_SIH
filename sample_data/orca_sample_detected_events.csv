@@ -1,0 +1,8 @@
+event_id,time,event_type,pixel_count,estimated_area_km2,centroid_lat,centroid_lon,min_SSTA,max_chl,mean_MHI
+20220804_Dynamic_Perturbation_0,2022-08-04,Dynamic Perturbation,65,48100,10.4,73.88,-1.01,0.34,54.0
+20220804_Dynamic_Perturbation_1,2022-08-04,Dynamic Perturbation,4,2960,11.0,65.62,-0.35,0.16,51.5
+20220804_Dynamic_Perturbation_2,2022-08-04,Dynamic Perturbation,6,4440,13.75,66.29,-0.65,0.1,48.9
+20220804_Dynamic_Perturbation_3,2022-08-04,Dynamic Perturbation,6,4440,15.17,73.29,-0.25,0.78,61.4
+20220804_Dynamic_Perturbation_4,2022-08-04,Dynamic Perturbation,3,2220,20.92,72.5,1.81,0.32,14.1
+20220804_Productive_Upwelling_0,2022-08-04,Productive Upwelling,161,119140,11.04,74.96,-4.24,5.49,71.4
+20220804_Thermal_Stress_MHW_0,2022-08-04,Thermal Stress (MHW),8,5920,21.16,72.38,1.92,1.83,16.3
