@@ -1,5 +1,9 @@
 # ORCA v2: Arabian Sea Marine Ecosystem Indicators & Forecast (2010–2025)
 
+Author: Yash Verma (GitHub: Paapiverma)
+
+Based on the original Smart India Hackathon prototype (https://github.com/SakshamBaurai/ORCA_marine_ecosystem_resoning_SIH); the v2 rebuild in this folder (long-record data pipeline, rules, forecast experiments) is by Yash Verma.
+
 ## 1. What It Does
 ORCA v2 is an oceanographic data pipeline and machine learning benchmarking suite designed for coastal upwelling and hypoxia-risk detection across the Eastern Arabian Sea (8.0°N to 22.0°N, 65.0°E to 78.0°E). It covers a 16-year continuous daily record (2010–2025):
 - **Rule-Based Environmental Indicators**: Automated daily classification of coastal upwelling events and sub-surface low-oxygen risk using ocean physics and biogeochemistry.
@@ -9,12 +13,17 @@ ORCA v2 is an oceanographic data pipeline and machine learning benchmarking suit
 
 ## 2. Data Sources & Specifications
 All ocean environmental data are sourced from the **Copernicus Marine Service (CMEMS)**:
+- **Physics**: Mercator GLORYS12V1 (`cmems_mod_glo_phy_my_0.083deg_P1D-m`), 1/12° (~9 km) daily, numerical model output. Variables: `thetao` (temperature), `uo` (eastward velocity), `vo` (northward velocity), depth-averaged 0–50 m.
+- **Biogeochemistry**: Copernicus biogeochemistry model (`cmems_mod_glo_bgc_my_0.25deg_P1D-m`), 1/4° (~28 km) daily, numerical model output. Variables: `chl` (chlorophyll-a, 0–50 m), `no3` (nitrate, 0–50 m), `o2` (dissolved oxygen, 0–50 m and 50–150 m). Regridded to the 1/12° physics grid with 25 km nearest-neighbor fill for coastal cells. Chlorophyll, nitrate, and oxygen originate from the Copernicus biogeochemistry model (the same model, so they are not independent signals).
+- **Sea Level**: Satellite altimetry (DUACS) (`cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`), 1/8° (~14 km) daily, satellite observation. Variable: `sla` (sea level anomaly). Regridded to the 1/12° physics grid.
+- **Wind**: Not used in v2. Surface wind forcing was not used in the long-record indicator rules or forecast models.
 
 | Variable Type | Product Identifier | Resolution | Depth Range | Source Type | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Physics** | `cmems_mod_glo_phy_my_0.083deg_P1D-m` | 1/12° (~9 km) daily | 0–50 m mean | Numerical Model | Variables: `thetao` (temperature), `uo` (eastward velocity), `vo` (northward velocity). 0–50 m depth-averaged. |
-| **Biogeochemistry** | `cmems_mod_glo_bgc_my_0.25deg_P1D-m` | 1/4° (~28 km) daily | 0–50 m & 50–150 m | Numerical Model | Variables: `chl` (chlorophyll-a), `no3` (nitrate), `o2` (dissolved oxygen). Regridded to physics 1/12° grid with 25 km NN fill. **Note: `chl` and `no3` originate from the exact same biogeochemical model simulation.** |
-| **Sea Level** | `cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D` | 1/8° (~14 km) daily | Surface | Satellite Observation | Variable: `sla` (sea level anomaly). Regridded to physics 1/12° grid. |
+| **Physics** | Mercator GLORYS12V1 (`cmems_mod_glo_phy_my_0.083deg_P1D-m`) | 1/12° (~9 km) daily | 0–50 m mean | Model Output | Variables: `thetao`, `uo`, `vo`. Numerical model output. |
+| **Biogeochemistry** | Copernicus Biogeochemistry Model (`cmems_mod_glo_bgc_my_0.25deg_P1D-m`) | 1/4° (~28 km) daily | 0–50 m & 50–150 m | Model Output | Variables: `chl`, `no3`, `o2`. Chlorophyll, nitrate, oxygen come from the same model (not independent signals). |
+| **Sea Level** | Satellite Altimetry (DUACS) (`cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`) | 1/8° (~14 km) daily | Surface | Satellite Observation | Variable: `sla`. Satellite altimetry. |
+| **Wind** | ERA5 10m Wind | 0.25° daily | Surface (10 m) | Reanalysis | **Not used in v2.** |
 
 *Note on Near-Real-Time Extension (2023–2025)*: The long-record reanalysis spans 2010–2022. The 2023–2025 operational period uses corresponding CMEMS Near-Real-Time (NRT) products (`cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m`, `cmems_mod_glo_bgc-bio_anfc_0.25deg_P1D-m`).
 
@@ -31,7 +40,7 @@ Ocean cells are evaluated daily on an offshore swath across the domain:
      - `ref_o2deep`: Daily spatial median of 50–150 m depth-averaged dissolved oxygen (`o2_50_150m`) among offshore reference cells in that $\pm 0.5^\circ$ latitude band (`np.nanmedian(o2deep_2d[:, ref_cells], axis=1)`).
 
 2. **Northern Latitude Exclusion (`excluded_north`)**:
-   - `LAT_CUTOFF = 19.5°N`. Cells with `latitude >= 19.5°N` are flagged `excluded_north = 1` and their indicator flags (`upwelling`, `low_oxygen_risk`) are strictly forced to `0`. This eliminates spurious winter false alarms caused by shallow macro-tidal dynamics and turbidity in the Gulf of Khambhat.
+   - `LAT_CUTOFF = 19.5°N`. Cells with `latitude >= 19.5°N` are flagged `excluded_north = 1` and their indicator flags (`upwelling`, `low_oxygen_risk`) are strictly forced to `0`: the Gulf of Khambhat produced winter false alarms; shallow, tide-stirred water is a probable cause, which was not tested.
 
 3. **Exclusion of Interpolated / Filled Values**:
    - Biogeochemical fields regridded to the 1/12° physics grid use a 25 km nearest-neighbor fill for coastal grid alignment. Cells where values were filled (`no3_filled == 1` or `chl_filled == 1`) are strictly excluded from upwelling classification (`no3_filled == 0` and `chl_filled == 0`).
@@ -136,6 +145,8 @@ Comparison of model feature subsets against the historical day-of-year seasonal 
 | **$h=3$ days** | 11,580,711 | 0.002554 | 0.165360 | 0.128452 | 0.243547 | **0.328301** | **1.985x** | **2.556x** | **1.348x** |
 | **$h=5$ days** | 11,585,239 | 0.003539 | 0.229029 | 0.141874 | 0.268910 | **0.368250** | **1.608x** | **2.596x** | **1.369x** |
 
+V1 (calendar and location only) scored below the seasonal baseline, so beating V1 is an easy comparison; the meaningful comparison is the seasonal baseline. Removing the temperature, nitrate and chlorophyll features (V2) lowers the score by about a third, so part of the skill comes from conditions near our own rule thresholds. The model predicts our own rule's flag, not independently measured upwelling.
+
 ---
 
 ### Benchmark D: Year-by-Year Onset Performance (Jun–Sep, 2020–2025)
@@ -187,8 +198,8 @@ Comparison of model feature subsets against the historical day-of-year seasonal 
 ## 7. Plain-Language Scientific Limitations (Mandatory)
 
 1. **Rule Labels Are Not Ground Truth**: The upwelling indicators (`upwelling == 1`) are heuristic thresholds defined by oceanographic domain reasoning, not in-situ field measurements or certified ground truth labels. Any ML model trained on them is learning to replicate the rule behavior from ocean features.
-2. **Post-Hoc Threshold Selection**: The exact criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate, $\ge 0.5\text{ mg/m}^3$ chlorophyll, and $\le -50.0\text{ mmol/m}^3$ deep oxygen deficit) were tuned after examining the 2022 Southwest India (Kerala) upwelling event. The $19.5^\circ\text{N}$ cutoff was explicitly added after encountering false-positive triggers in the shallow, high-turbidity waters of the Gulf of Khambhat.
-3. **Limited Observational Verification**: The only observational cross-check performed was a 13-year satellite chlorophyll correlation ($r = 0.75$), which represents a limited coastal sample size.
+2. **Post-Hoc Threshold Selection**: The exact criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate, $\ge 0.5\text{ mg/m}^3$ chlorophyll, and $\le -50.0\text{ mmol/m}^3$ deep oxygen deficit) were tuned after examining the 2022 Southwest India (Kerala) upwelling event. The $19.5^\circ\text{N}$ cutoff was explicitly added because the Gulf of Khambhat produced winter false alarms; shallow, tide-stirred water is a probable cause, which was not tested.
+3. **Limited Observational Verification**: The only observational cross-check performed was 13 yearly values (2010–2022), one region (8–15°N, 72–77.5°E), June–September mean, correlation 0.75 between yearly upwelling cell-days and satellite chlorophyll. This is a small sample.
 4. **Model-Estimated Hypoxia**: The `low_oxygen_risk` flag is derived from a numerical reanalysis model, not direct dissolved oxygen sensors. It is **invalid in bathymetry shallower than 50 m** where vertical mixing and bottom boundary processes differ substantially from model assumptions.
 5. **Marine Heatwaves Omitted**: Dedicated marine heatwave (MHW) detection was not implemented due to the lack of an operational 30-year daily climatological baseline required by standard definitions (e.g. Hobday et al.).
 6. **Wind Forcing Omitted**: Surface wind forcing (ERA5 10m wind components $u_{10}, v_{10}$) was not incorporated into the final long-record models because the automated CDS download pipeline could not be completed within execution constraints.
