@@ -1,13 +1,22 @@
 # ORCA v2: Arabian Sea Marine Ecosystem Indicators & Forecast (2010–2025)
 
+Contains modified E.U. Copernicus Marine Service Information (CMEMS).
+
 Author: Yash Verma (GitHub: Paapiverma)
 
 Based on the original Smart India Hackathon prototype (https://github.com/SakshamBaurai/ORCA_marine_ecosystem_resoning_SIH); the v2 rebuild in this folder (long-record data pipeline, rules, forecast experiments) is by Yash Verma.
 
+## Summary
+- **Rule Alignment with Season & Place**: The rule-based indicators trigger primarily along the Southwest coast of India (Kerala/Karnataka) during the summer monsoon (June–September) and agree moderately with a satellite chlorophyll check (Pearson $r = 0.777$, Spearman $r = 0.819$ over the 13 yearly values 2010–2022: satellite chlorophyll means of 1.53, 1.05, 0.69, 1.25, 1.09, 0.74, 1.77, 1.20, 1.31, 0.61, 0.77, 1.20, 1.54 mg/m³ versus upwelling cell-days of 63,649, 52,971, 49,678, 60,899, 41,837, 35,992, 64,306, 62,854, 70,206, 23,374, 16,828, 39,211, 65,260).
+- **Flag Forecast Did Not Beat Persistence**: Predicting daily upwelling flags across horizons of 1, 3, and 5 days failed to beat simple persistence on overall F1 score across 2020–2025 (model F1: 0.948, 0.881, 0.838 vs persistence F1: 0.951, 0.891, 0.852).
+- **Onset Forecast Outperformed Baseline on Average but Lost in 2021**: Transition forecasting (conditioned on an unflagged cell at day $D$ turning on at day $D+h$) beat the 2010–2017 seasonal day-of-year baseline on average at 3 days (AP 0.328 vs 0.165, 1.99x) and 5 days (AP 0.368 vs 0.229, 1.61x), but lost to the seasonal climatology in 2021 at 5 days (0.382 vs 0.430, 0.889x).
+- **Labels Reflect Our Own Heuristic Rules**: The model predicts flags produced by our own rule thresholds, not independent physical oceanographic phenomena or verified coastal sensor data.
+- **No Independent Ground Truth**: The pipeline relies entirely on numerical models and satellite altimetry/chlorophyll; no in-situ ground truth dataset or certified event catalog was available for independent validation.
+
 ## 1. What It Does
 ORCA v2 is an oceanographic data pipeline and machine learning benchmarking suite designed for coastal upwelling and low-oxygen risk (model-estimated) detection across the Eastern Arabian Sea (8.0°N to 22.0°N, 65.0°E to 78.0°E). It covers a 16-year continuous daily record (2010–2025):
 - **Rule-Based Environmental Indicators**: Automated daily classification of coastal upwelling events and sub-surface low-oxygen risk using ocean physics and biogeochemistry.
-- **Machine Learning Forecast Benchmark**: Spatial and gradient-boosted forecasting models predicting future upwelling events and sudden onset events across horizons of 1 to 15 days.
+- **Machine Learning Forecast Benchmark**: Spatial and gradient-boosted forecasting models predicting future upwelling events (flag forecast across horizons of 1, 3, and 5 days) and sudden onset events (across horizons of 1 to 15 days).
 
 ---
 
@@ -78,21 +87,46 @@ copernicusmarine login
 ### Model Artifacts & Safety
 The model files are pickled scikit-learn objects, to be loaded only from a source you trust, trained with scikit-learn version 1.9.1.
 
-### Path Configuration
-All scripts import paths from `orca_v2/config.py`. You can override any default path by setting environment variables:
-- `ORCA_LONG_DIR`: Directory storing long-record parquet files (`ocean_long_YYYY.parquet` and `rules_v3c_YYYY.parquet`).
-- `MERGED_V3_DIR`: Directory storing 2023–2025 processed data.
-- `RAW_TEMP_DIR`: Staging directory for temporary raw NetCDF downloads.
+### Pipeline Architecture & Rule Generation Chains
+Indicator rules are produced through two distinct pipelines depending on the time period:
+- **2010–2022 (Long-Record Pipeline)**: Computed directly inside `build_long_year.py` (or batched across years via `run_long_years.py`). The script downloads physics, BGC, and sea level reanalysis NetCDFs, regrids them to the 1/12° grid, evaluates spatial offshore reference medians, applies the 19.5°N northern exclusion, and saves both `ocean_long_YYYY.parquet` and `rules_v3c_YYYY.parquet` inline.
+- **2023–2025 (Operational Store Pipeline)**: Produced sequentially through a three-script chain:
+  1. `build_merged_v4.py`: Computes day-of-year rolling climatologies and baseline anomalies from `MERGED_V3`, producing `ocean_v4_YYYY.parquet`.
+  2. `build_rules_v2.py`: Evaluates spatial offshore reference medians and rule thresholds, producing `rules_v2_YYYY.parquet`.
+  3. `build_rules_v3c.py`: Masks out cells north of 19.5°N (`excluded_north = 1`) to generate final `rules_v3c_YYYY.parquet`.
+
+*Note on Execution*: The full pipeline has not been re-run end to end from a clean clone; only the individual steps were run.
+
+### Path Configuration & Environment Variables
+All scripts import centralized paths from `orca_v2/config.py`. Every directory can be overridden via environment variables:
+- `ORCA_V2_DIR`: Root directory of the `orca_v2` module (default: directory containing `config.py`).
+- `ORCA_PROJECT_ROOT`: Project root working directory (default: `C:\ORCA REMASTERED`).
+- `ORCA_LONG_DIR`: Directory storing long-record parquets for 2010–2022 (`ocean_long_YYYY.parquet` and `rules_v3c_YYYY.parquet`; default: `G:\My Drive\ORCA_LONG`).
+- `MERGED_V3_DIR`: Directory storing 2022–2025 raw merged parquets (default: `ORCA_PROJECT_ROOT / "MERGED_V3"`).
+- `MERGED_V4_DIR`: Directory storing rolling climatology and anomaly parquets (default: `ORCA_PROJECT_ROOT / "MERGED_V4"`).
+- `RULES_V2_DIR`: Directory storing intermediate rules v2 parquets (default: `ORCA_PROJECT_ROOT / "RULES_V2"`).
+- `RULES_V3C_DIR`: Directory storing final indicator rules v3c parquets (default: `ORCA_PROJECT_ROOT / "RULES_V3C"`).
+- `RAW_TEMP_DIR`: Staging directory for temporary raw NetCDF downloads (default: `C:\ORCA_TEMP\raw`).
+- `LOGS_DIR`: Directory for pipeline execution logs (default: `ORCA_PROJECT_ROOT / "logs"`).
+- `MODELS_DIR`: Directory storing trained scikit-learn model artifacts (default: `ORCA_V2_DIR / "models"`).
+- `SAMPLE_DATA_DIR`: Directory storing bundled sample parquets (default: `ORCA_V2_DIR / "sample_data"`).
+- `FIGURES_DIR`: Directory for diagnostic plots and map figures (default: `ORCA_V2_DIR / "figures"`).
 
 ### Execution Order
 ```bash
-# 1. Download and process long-record years (e.g. 2021 down to 2010)
-python orca_v2/run_long_years.py --start-year 2021 --earliest-year 2010
+# 1. Download and process long-record years (2010–2022)
+# Emits ocean_long_YYYY.parquet and rules_v3c_YYYY.parquet
+python orca_v2/run_long_years.py 2010
 
-# 2. Build indicator rules
+# 2. Build 2023–2025 climatologies and indicator rules
+python orca_v2/build_merged_v4.py
+python orca_v2/build_rules_v2.py
 python orca_v2/build_rules_v3c.py
 
-# 3. Run Forecast Suite
+# 3. Validate against satellite chlorophyll observations (2010–2022)
+python orca_v2/check_satellite_chl.py
+
+# 4. Run Forecast Suite
 # Benchmark A: Standard flag forecast vs persistence baseline (FORECAST2)
 python orca_v2/forecast2_persistence_test.py
 
@@ -108,6 +142,7 @@ python orca_v2/forecast4_robustness_test.py
 ## 5. Quantitative Results (Exact CSV Extraction)
 
 ### Benchmark A: Upwelling Flag Forecast vs. Persistence (2020–2025, Jun–Sep)
+*(Source data: `orca_v2/results/forecast_metrics.csv`)*  
 Target: Predicting `upwelling` flag at $D+h$ across all cells with $\text{latitude} < 19.5^\circ\text{N}$.
 
 | Horizon ($h$) | Model / Baseline | Precision | Recall | F1 Score | Onset Events | Onset Precision | Onset Recall |
@@ -124,6 +159,7 @@ Target: Predicting `upwelling` flag at $D+h$ across all cells with $\text{latitu
 ---
 
 ### Benchmark B: Upwelling Onset Forecast (FORECAST3)
+*(Source data: `orca_v2/results/onset_metrics.csv`)*  
 Task: Conditioned on cell being unflagged at day $D$ (`upwelling == 0`), predict transition to `upwelling == 1` at day $D+h$. Evaluated on 2020–2025 (Jun–Sep).
 
 | Horizon ($h$) | Base Rate | Model AP (`ap_v3`) | Season Baseline AP | Spreading Baseline AP | Flicker Baseline AP | Ratio vs Best Baseline | Model Val Cutoff | Model Val F1 |
@@ -135,6 +171,7 @@ Task: Conditioned on cell being unflagged at day $D$ (`upwelling == 0`), predict
 ---
 
 ### Benchmark C: Ablation Study (FORECAST4, Jun–Sep 2020–2025)
+*(Source data: `orca_v2/results/ablation_metrics.csv`)*  
 Comparison of model feature subsets against the historical day-of-year seasonal baseline:
 - **V1 (Calendar & Location only)**: latitude, longitude, is_coastal, sin_doy, cos_doy (5 features).
 - **V2 (Full minus Rule Ingredients)**: full features removing thetao drop, no3, chl, and window thermal signals (15 features).
@@ -145,11 +182,12 @@ Comparison of model feature subsets against the historical day-of-year seasonal 
 | **$h=3$ days** | 11,580,711 | 0.002554 | 0.165360 | 0.128452 | 0.243547 | **0.328301** | **1.985x** | **2.556x** | **1.348x** |
 | **$h=5$ days** | 11,585,239 | 0.003539 | 0.229029 | 0.141874 | 0.268910 | **0.368250** | **1.608x** | **2.596x** | **1.369x** |
 
-V1 (calendar and location only) scored below the seasonal baseline, so beating V1 is an easy comparison; the meaningful comparison is the seasonal baseline. Removing the temperature, nitrate and chlorophyll features (V2) lowers the score by about a third, so part of the skill comes from conditions near our own rule thresholds. The model predicts our own rule's flag, not independently measured upwelling.
+V1 (calendar and location only) scored below the seasonal baseline, so beating V1 is an easy comparison; the meaningful comparison is the seasonal baseline. removing them (V2) lowers average precision by about a quarter (-26% at h=3, -27% at h=5; equivalently V3 is about 35% above V2), so part of the skill comes from conditions near our own rule thresholds. The model predicts our own rule's flag, not independently measured upwelling.
 
 ---
 
 ### Benchmark D: Year-by-Year Onset Performance (Jun–Sep, 2020–2025)
+*(Source data: `orca_v2/results/per_year_metrics.csv`)*  
 
 | Year | Horizon ($h$) | Onset Events | Base Rate | Model AP (`ap_v3`) | Season Baseline AP | Ratio (V3 / Season) | V3 Beats Season? |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -171,6 +209,7 @@ V1 (calendar and location only) scored below the seasonal baseline, so beating V
 ---
 
 ### Benchmark E: Horizon Sweep (V3 Full Model, Jun–Sep 2020–2025)
+*(Source data: `orca_v2/results/horizon_sweep_metrics.csv`)*  
 
 | Horizon ($h$) | Total Rows | Onset Events | Base Rate | Model AP (`ap_v3`) | Season Baseline AP | Ratio V3 / Season |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -185,26 +224,36 @@ V1 (calendar and location only) scored below the seasonal baseline, so beating V
 
 ## 6. Pass / Fail Evaluation Summary
 
-| Objective / Hypothesis | Evaluation Criterion | Empirical Result | Outcome |
+The criteria below were fixed BEFORE each experiment was run, compared here against the empirical outcomes:
+
+> **Note on Problem Selection**: The onset forecast problem (FORECAST3) was chosen and formulated **after seeing the flag forecast results (FORECAST2)**, which showed that predicting all cells is dominated by persistence.
+
+| Experiment / Check | Pre-Fixed Criterion | Empirical Result (from `orca_v2/results/`) | Outcome |
 | :--- | :--- | :--- | :--- |
-| **Flag Forecast vs Persistence (FORECAST2)** | Model F1 > Persistence F1 over 2020–2025 | At $h=1$: 0.9485 vs 0.9513<br>At $h=3$: 0.8814 vs 0.8913<br>At $h=5$: 0.8383 vs 0.8520 | **FAIL** (Model does not beat persistence) |
-| **Onset Forecast vs Climatology (FORECAST3)** | Model AP > Season AP on 2020–2025 Jun–Sep | At $h=3$: 0.3283 vs 0.1654 (+98.5%)<br>At $h=5$: 0.3683 vs 0.2290 (+60.8%) | **PASS** (Clear gain over season baseline) |
-| **Yearly Consistency at $h=3$ (FORECAST4)** | Model AP > Season AP in each individual test year | Beats season in 6 of 6 years (2020–2025) | **PASS** |
-| **Yearly Consistency at $h=5$ (FORECAST4)** | Model AP > Season AP in each individual test year | Beats season in 5 of 6 years; **loses in 2021 (0.3821 vs 0.4300)** | **FAIL** (Inconsistent across strong anomalous years) |
-| **Feature Added Value (FORECAST4)** | Full Model (V3) AP > No-Rule-Features (V2) AP | V3 beats V2 by +34.8% at $h=3$, and +36.9% at $h=5$ | **PASS** |
+| **Flag Forecast (FORECAST2)** | Model F1 must beat Persistence F1 by at least **0.02** at $h=3$ and $h=5$ (Jun–Sep, 2020–2025). | At $h=3$: Model F1 = 0.8814 vs Persistence F1 = 0.8913 (diff: **-0.0099**)<br>At $h=5$: Model F1 = 0.8383 vs Persistence F1 = 0.8520 (diff: **-0.0137**)<br>*(from `forecast_metrics.csv`)* | **FAIL** |
+| **Onset Forecast (FORECAST3)** | Model Average Precision (AP) $\ge 1.25\times$ best of three baselines (Season, Spreading, Flicker) at $h=3$ and $h=5$ on 2020–2025 Jun–Sep, and also separately on 2020–2021 and on 2022–2025.<br>*(Season was the best baseline in all cases)* | **All six ratios exceed 1.25x**:<br>• $h=3$, 2020–2021: Model 0.3124 vs Season 0.1791 (**1.745x**)<br>• $h=3$, 2022–2025: Model 0.3363 vs Season 0.1751 (**1.920x**)<br>• $h=3$, 2020–2025: Model 0.3283 vs Season 0.1654 (**1.985x**)<br>• $h=5$, 2020–2021: Model 0.3382 vs Season 0.2331 (**1.451x**)<br>• $h=5$, 2022–2025: Model 0.3816 vs Season 0.2553 (**1.495x**)<br>• $h=5$, 2020–2025: Model 0.3683 vs Season 0.2290 (**1.608x**)<br>*(from `onset_metrics.csv`)* | **PASS** |
+| **Robustness (a): V3 vs V1 (FORECAST4)** | V3 AP $\ge 1.25\times$ V1 AP (calendar & location only) at $h=3$ and $h=5$ (Jun–Sep, 2020–2025). | At $h=3$: V3 0.328301 vs V1 0.128452 (**2.556x**)<br>At $h=5$: V3 0.368250 vs V1 0.141874 (**2.596x**)<br>*(Note: V1 is a weak control because it scored below the seasonal baseline)*<br>*(from `ablation_metrics.csv`)* | **PASS** |
+| **Robustness (b): Yearly Consistency (FORECAST4)** | V3 AP beats Season Baseline AP in each of the six test years (2020–2025) at $h=3$ and $h=5$. | At $h=3$: Beats season in 6 of 6 years (1.11x to 1.87x).<br>At $h=5$: Beats season in 5 of 6 years, but **loses in 2021**: Model AP 0.3821 vs Season AP 0.4300 (**0.889x**)<br>*(from `per_year_metrics.csv`)* | **FAIL** |
+| **Robustness (c): V2 vs V3 (FORECAST4)** | *Informational only*: measure performance drop when removing rule ingredients (thetao drop, no3, chl). | Removing rule inputs (V2) lowers AP by about a quarter (-26% at $h=3$, 0.2435 vs 0.3283; -27% at $h=5$, 0.2689 vs 0.3683); V3 lifts over V2 by +34.8% at $h=3$ and +36.9% at $h=5$.<br>*(from `ablation_metrics.csv`)* | **Informational** |
+| **Robustness (c): Horizon Sweep (FORECAST4)** | *Informational only*: sweep lead time from $h=1$ to $h=15$ days. | Model AP rises from 0.1139 ($h=1$) to 0.5001 ($h=15$), while Season Baseline AP rises from 0.0741 to 0.4147. Ratio vs baseline peaks at $h=3$ (1.985x) and drops to 1.206x at $h=15$.<br>*(from `horizon_sweep_metrics.csv`)* | **Informational** |
 
 ---
 
 ## 7. Plain-Language Scientific Limitations (Mandatory)
 
-1. **Rule Labels Are Not Ground Truth**: The upwelling indicators (`upwelling == 1`) are heuristic thresholds defined by oceanographic domain reasoning, not in-situ field measurements or certified ground truth labels. Any ML model trained on them is learning to replicate the rule behavior from ocean features.
-2. **Post-Hoc Threshold Selection**: The exact criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate, $\ge 0.5\text{ mg/m}^3$ chlorophyll, and $\le -50.0\text{ mmol/m}^3$ deep oxygen deficit) were tuned after examining the 2022 Southwest India (Kerala) upwelling event. The $19.5^\circ\text{N}$ cutoff was explicitly added because the Gulf of Khambhat produced winter false alarms; shallow, tide-stirred water is a probable cause, which was not tested.
-3. **Limited Observational Verification**: The only observational cross-check performed was 13 yearly values (2010–2022), one region (8–15°N, 72–77.5°E), June–September mean, correlation 0.75 between yearly upwelling cell-days and satellite chlorophyll. This is a small sample.
-4. **Model-Estimated Low-Oxygen Risk**: The `low_oxygen_risk` flag is derived from a numerical reanalysis model, not direct dissolved oxygen sensors. It is **invalid in bathymetry shallower than 50 m** where vertical mixing and bottom boundary processes differ substantially from model assumptions.
-5. **Marine Heatwaves Omitted**: Dedicated marine heatwave (MHW) detection was not implemented due to the lack of an operational 30-year daily climatological baseline required by standard definitions (e.g. Hobday et al.).
-6. **Wind Forcing Omitted**: Surface wind forcing (ERA5 10m wind components $u_{10}, v_{10}$) was not incorporated into the final long-record models because the automated CDS download pipeline could not be completed within execution constraints.
-7. **Forecast Generalization & Exploration Caveats**:
-   - The standard upwelling flag prediction **failed to outperform the simple persistence baseline** across 2020–2025.
-   - The onset-specific formulation was formulated **after inspecting initial forecast failures**, making it an exploratory analysis rather than a pre-registered hypothesis test.
-   - While the onset model outperforms the seasonal baseline on average, it **underperformed the baseline in 2021 at $h=5$**.
-   - Test years were inspected multiple times during pipeline development.
+1. **Rule Labels Are Not Ground Truth**: The upwelling indicators (`upwelling == 1`) are heuristic thresholds defined by oceanographic domain reasoning, not in-situ field measurements, CTD casts, or certified ground truth labels. Any ML model trained on them is learning to replicate the rule behavior from ocean features.
+2. **Post-Hoc Threshold Selection & Test Overlap**:
+   - The exact rule criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate, $\ge 0.5\text{ mg/m}^3$ chlorophyll, and $\le -50.0\text{ mmol/m}^3$ deep oxygen deficit) were chosen while inspecting 2022–2025 data, which overlaps the 2020–2025 test years. The **2020–2021 test period is the cleanest evaluation period** because those years were not inspected during threshold design.
+   - The $19.5^\circ\text{N}$ cutoff was explicitly added because the Gulf of Khambhat produced winter false alarms; shallow, tide-stirred water is a probable cause, which was not tested.
+3. **Spatial and Temporal Correlation**: Neighboring ocean cells (1/12° grid) and consecutive days are strongly correlated. Consequently, cell-day sample counts (millions of rows) substantially overstate the amount of independent statistical evidence.
+4. **No Confidence Intervals**: All reported metrics (F1 scores, Average Precision, correlations) are point estimates; no bootstrap confidence intervals or standard errors are reported.
+5. **Single Numerical Biogeochemical Model**: Chlorophyll, nitrate, and dissolved oxygen do not come from in-situ water samples or independent sensors, but from a single numerical model reanalysis (Copernicus `GLOBAL_MULTIYEAR_BGC_001_029`). Systematic model biases or parameterization artifacts will directly propagate into the indicator flags and ML training.
+6. **Geographic and Seasonal Specificity**: All findings and models are specific to the southwest coast of India (Eastern Arabian Sea) and predominantly to the June–September southwest monsoon season. They cannot be generalized to other upwelling regions or winter conditions without retraining and validation.
+7. **Limited Observational Verification**: The only observational cross-check performed was 13 yearly values (2010–2022), one region (8–15°N, 72–77.5°E), June–September mean, correlation $r = 0.78$ (Pearson $r = 0.7774, p = 0.0018$; Spearman $r = 0.8187, p = 0.0006$) between yearly upwelling cell-days and satellite chlorophyll (`cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M`). This is a small sample (13 points) from one region.
+8. **Model-Estimated Low-Oxygen Risk**: The `low_oxygen_risk` flag is derived from a numerical reanalysis model, not direct dissolved oxygen sensors. It is **invalid in bathymetry shallower than 50 m** where vertical mixing and bottom boundary processes differ substantially from model assumptions.
+9. **Marine Heatwaves Omitted**: Dedicated marine heatwave (MHW) detection was not implemented due to the lack of an operational 30-year daily climatological baseline required by standard definitions (e.g. Hobday et al.).
+10. **Wind Forcing Omitted**: Surface wind forcing (ERA5 10m wind components $u_{10}, v_{10}$) was not incorporated into the final long-record models because the automated CDS download pipeline could not be completed within execution constraints.
+11. **Forecast Generalization & Exploration Caveats**:
+    - The standard upwelling flag prediction **failed to outperform the simple persistence baseline** across 2020–2025.
+    - The onset-specific formulation was formulated **after inspecting initial forecast failures**, making it an exploratory analysis rather than a pre-registered hypothesis test.
+    - While the onset model outperforms the seasonal baseline on average, it **underperformed the baseline in 2021 at $h=5$** (0.3821 vs 0.4300, ratio 0.889x).

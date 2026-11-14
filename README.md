@@ -1,6 +1,6 @@
 # ORCA: Arabian Sea Ocean Intelligence & Marine Ecosystem Reasoning
 
-> **Notice**: The current work is in [`orca_v2/`](orca_v2/), including the 16-year continuous daily ocean record (2010–2025), physical and biogeochemical indicator rules, and predictive gradient-boosted forecasting benchmarks. The files and documentation below describe the original hackathon version of the project.
+> **Notice**: The current work is in [`orca_v2/`](orca_v2/), including the 16-year continuous daily ocean record (2010–2025), physical and biogeochemical indicator rules, and predictive gradient-boosted forecasting benchmarks. The files and documentation below describe the original hackathon version of the project. Heatwave and hypoxia claims and the chlorophyll 'measurements' wording below were not validated; see orca_v2/ for what was tested and its limits.
 
 ORCA is an oceanographic intelligence engine designed for the Arabian Sea (8°N–22°N, 65°E–77.5°E). It detects multi-parameter marine anomalies to pinpoint Productive Upwelling (Potential Fishing Zones / PFZ), Thermal Stress (Marine Heatwaves / MHW), and Coastal Eutrophication / Hypoxia hazards.
 
