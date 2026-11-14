@@ -5,7 +5,7 @@ Author: Yash Verma (GitHub: Paapiverma)
 Based on the original Smart India Hackathon prototype (https://github.com/SakshamBaurai/ORCA_marine_ecosystem_resoning_SIH); the v2 rebuild in this folder (long-record data pipeline, rules, forecast experiments) is by Yash Verma.
 
 ## 1. What It Does
-ORCA v2 is an oceanographic data pipeline and machine learning benchmarking suite designed for coastal upwelling and hypoxia-risk detection across the Eastern Arabian Sea (8.0°N to 22.0°N, 65.0°E to 78.0°E). It covers a 16-year continuous daily record (2010–2025):
+ORCA v2 is an oceanographic data pipeline and machine learning benchmarking suite designed for coastal upwelling and low-oxygen risk (model-estimated) detection across the Eastern Arabian Sea (8.0°N to 22.0°N, 65.0°E to 78.0°E). It covers a 16-year continuous daily record (2010–2025):
 - **Rule-Based Environmental Indicators**: Automated daily classification of coastal upwelling events and sub-surface low-oxygen risk using ocean physics and biogeochemistry.
 - **Machine Learning Forecast Benchmark**: Spatial and gradient-boosted forecasting models predicting future upwelling events and sudden onset events across horizons of 1 to 15 days.
 
@@ -25,7 +25,7 @@ All ocean environmental data are sourced from the **Copernicus Marine Service (C
 | **Sea Level** | Satellite Altimetry (DUACS) (`cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`) | 1/8° (~14 km) daily | Surface | Satellite Observation | Variable: `sla`. Satellite altimetry. |
 | **Wind** | ERA5 10m Wind | 0.25° daily | Surface (10 m) | Reanalysis | **Not used in v2.** |
 
-*Note on Near-Real-Time Extension (2023–2025)*: The long-record reanalysis spans 2010–2022. The 2023–2025 operational period uses corresponding CMEMS Near-Real-Time (NRT) products (`cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m`, `cmems_mod_glo_bgc-bio_anfc_0.25deg_P1D-m`).
+*Note on 2023–2025 Data Provenance*: Years 2010–2022 were built from the long-record products listed above (`build_long_year.py`). Years 2023–2025 come from earlier raw downloads whose NetCDF headers state the same products as 2022 (physics: `MERCATOR GLORYS12V1`, BGC: `GLOBAL_REANALYSIS_BIO_001_029` / `MERCATOR FREEBIORYS2V4`, sea level: `DUACS DT merged`). Year 2022 was verified identical to the long-record products (mean difference 0.0000 for all variables), but 2023–2025 were NOT compared with the long-record products. The long-record products extend beyond 2025, so the 2023–2025 inputs could be rebuilt from them.
 
 ---
 
@@ -55,7 +55,7 @@ Ocean cells are evaluated daily on an offshore swath across the domain:
    - `chl_filled == 0` (Chlorophyll is directly modelled, not coastal-filled)
 
 5. **Low-Oxygen Risk Flag (`low_oxygen_risk`)**:
-   A cell is flagged for sub-surface hypoxia risk (`1`) if and only if:
+   A cell is flagged for sub-surface low-oxygen risk (model-estimated) (`1`) if and only if:
    - The cell is actively upwelling: `upwelling == 1` (inherits northern exclusion, un-filled validation, temperature drop, nitrate, and chlorophyll criteria)
    - Deep oxygen data are valid: `~np.isnan(o2_50_150m)` and `~np.isnan(ref_o2deep)` (cells in bathymetry shallower than 50 m do not have 50–150 m depth data and evaluate to `0`)
    - Deep oxygen deficit: `(o2_50_150m - ref_o2deep) <= -50.0` (sub-surface dissolved oxygen drops $\ge 50.0\text{ mmol/m}^3$ below the offshore reference median for that latitude band)
@@ -81,13 +81,13 @@ The model files are pickled scikit-learn objects, to be loaded only from a sourc
 ### Path Configuration
 All scripts import paths from `orca_v2/config.py`. You can override any default path by setting environment variables:
 - `ORCA_LONG_DIR`: Directory storing long-record parquet files (`ocean_long_YYYY.parquet` and `rules_v3c_YYYY.parquet`).
-- `MERGED_V3_DIR`: Directory storing operational 2023–2025 data.
+- `MERGED_V3_DIR`: Directory storing 2023–2025 processed data.
 - `RAW_TEMP_DIR`: Staging directory for temporary raw NetCDF downloads.
 
 ### Execution Order
 ```bash
 # 1. Download and process long-record years (e.g. 2021 down to 2010)
-python orca_v2/run_long_years.py --start-year 2021 --end-year 2010
+python orca_v2/run_long_years.py --start-year 2021 --earliest-year 2010
 
 # 2. Build indicator rules
 python orca_v2/build_rules_v3c.py
@@ -200,7 +200,7 @@ V1 (calendar and location only) scored below the seasonal baseline, so beating V
 1. **Rule Labels Are Not Ground Truth**: The upwelling indicators (`upwelling == 1`) are heuristic thresholds defined by oceanographic domain reasoning, not in-situ field measurements or certified ground truth labels. Any ML model trained on them is learning to replicate the rule behavior from ocean features.
 2. **Post-Hoc Threshold Selection**: The exact criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate, $\ge 0.5\text{ mg/m}^3$ chlorophyll, and $\le -50.0\text{ mmol/m}^3$ deep oxygen deficit) were tuned after examining the 2022 Southwest India (Kerala) upwelling event. The $19.5^\circ\text{N}$ cutoff was explicitly added because the Gulf of Khambhat produced winter false alarms; shallow, tide-stirred water is a probable cause, which was not tested.
 3. **Limited Observational Verification**: The only observational cross-check performed was 13 yearly values (2010–2022), one region (8–15°N, 72–77.5°E), June–September mean, correlation 0.75 between yearly upwelling cell-days and satellite chlorophyll. This is a small sample.
-4. **Model-Estimated Hypoxia**: The `low_oxygen_risk` flag is derived from a numerical reanalysis model, not direct dissolved oxygen sensors. It is **invalid in bathymetry shallower than 50 m** where vertical mixing and bottom boundary processes differ substantially from model assumptions.
+4. **Model-Estimated Low-Oxygen Risk**: The `low_oxygen_risk` flag is derived from a numerical reanalysis model, not direct dissolved oxygen sensors. It is **invalid in bathymetry shallower than 50 m** where vertical mixing and bottom boundary processes differ substantially from model assumptions.
 5. **Marine Heatwaves Omitted**: Dedicated marine heatwave (MHW) detection was not implemented due to the lack of an operational 30-year daily climatological baseline required by standard definitions (e.g. Hobday et al.).
 6. **Wind Forcing Omitted**: Surface wind forcing (ERA5 10m wind components $u_{10}, v_{10}$) was not incorporated into the final long-record models because the automated CDS download pipeline could not be completed within execution constraints.
 7. **Forecast Generalization & Exploration Caveats**:
