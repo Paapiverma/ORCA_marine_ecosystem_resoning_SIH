@@ -21,19 +21,35 @@ All ocean environmental data are sourced from the **Copernicus Marine Service (C
 ---
 
 ## 3. Indicator Rules & Thresholds
-Ocean cells are evaluated daily on an offshore swath within 200 km of the coastline:
+Ocean cells are evaluated daily on an offshore swath across the domain:
 
-1. **Latitude Boundary**:
-   - `excluded_north`: Cells with `latitude >= 19.5°N` are strictly excluded from upwelling classification to prevent shallow tidal false alarms in the Gulf of Khambhat.
-2. **Offshore Reference SST (`ref_thetao`)**:
-   - For each coastal/ocean cell, `ref_thetao` is the 200 km offshore median SST computed within a $\pm 0.5^\circ$ latitude slice.
-3. **Upwelling Flag (`upwelling`)**:
-   A cell is flagged as upwelling (`1`) if and only if all of the following conditions hold:
-   - `latitude < 19.5°N`
-   - `thetao <= ref_thetao - 1.0` (SST drop $\ge 1.0^\circ\text{C}$ relative to offshore waters)
-   - `no3 >= 0.5` (Nitrate enrichment $\ge 0.5\text{ mmol/m}^3$)
-4. **Low-Oxygen Risk Flag (`low_oxygen_risk`)**:
-   - `o2_50_150m < 60.0` (Dissolved oxygen averaged between 50 m and 150 m depth drops below $60.0\text{ mmol/m}^3$).
+1. **Spatial Domain & Offshore References**:
+   - **Distance from Land**: Computed using a `cKDTree` on spherical coordinates ($R = 6371.0\text{ km}$). Cells with distance $\ge 200.0\text{ km}$ from the nearest land grid cell are designated as offshore reference cells (`offshore = dist_to_land >= 200.0`).
+   - **Latitude Slicing**: For every unique latitude coordinate, offshore reference cells within a $\pm 0.5^\circ$ band (`np.abs(ocean_lats - lat_val) <= 0.5 + 1e-4`) are selected.
+   - **Reference Calculations**:
+     - `ref_thetao`: Daily spatial median of 0–50 m depth-averaged temperature (`thetao`) among offshore reference cells in that $\pm 0.5^\circ$ latitude band (`np.nanmedian(thetao_2d[:, ref_cells], axis=1)`).
+     - `ref_o2deep`: Daily spatial median of 50–150 m depth-averaged dissolved oxygen (`o2_50_150m`) among offshore reference cells in that $\pm 0.5^\circ$ latitude band (`np.nanmedian(o2deep_2d[:, ref_cells], axis=1)`).
+
+2. **Northern Latitude Exclusion (`excluded_north`)**:
+   - `LAT_CUTOFF = 19.5°N`. Cells with `latitude >= 19.5°N` are flagged `excluded_north = 1` and their indicator flags (`upwelling`, `low_oxygen_risk`) are strictly forced to `0`. This eliminates spurious winter false alarms caused by shallow macro-tidal dynamics and turbidity in the Gulf of Khambhat.
+
+3. **Exclusion of Interpolated / Filled Values**:
+   - Biogeochemical fields regridded to the 1/12° physics grid use a 25 km nearest-neighbor fill for coastal grid alignment. Cells where values were filled (`no3_filled == 1` or `chl_filled == 1`) are strictly excluded from upwelling classification (`no3_filled == 0` and `chl_filled == 0`).
+
+4. **Upwelling Flag (`upwelling`)**:
+   A cell is flagged as upwelling (`1`) if and only if all of the following conditions hold simultaneously:
+   - `latitude < 19.5°N` (`excluded_north == 0`)
+   - `(thetao - ref_thetao) <= -1.0` (SST drop $\ge 1.0^\circ\text{C}$ relative to the offshore median for that latitude band)
+   - `no3 >= 0.5` (Nitrate concentration $\ge 0.5\text{ mmol/m}^3$)
+   - `chl >= 0.5` (Chlorophyll-a concentration $\ge 0.5\text{ mg/m}^3$)
+   - `no3_filled == 0` (Nitrate is directly modelled, not coastal-filled)
+   - `chl_filled == 0` (Chlorophyll is directly modelled, not coastal-filled)
+
+5. **Low-Oxygen Risk Flag (`low_oxygen_risk`)**:
+   A cell is flagged for sub-surface hypoxia risk (`1`) if and only if:
+   - The cell is actively upwelling: `upwelling == 1` (inherits northern exclusion, un-filled validation, temperature drop, nitrate, and chlorophyll criteria)
+   - Deep oxygen data are valid: `~np.isnan(o2_50_150m)` and `~np.isnan(ref_o2deep)` (cells in bathymetry shallower than 50 m do not have 50–150 m depth data and evaluate to `0`)
+   - Deep oxygen deficit: `(o2_50_150m - ref_o2deep) <= -50.0` (sub-surface dissolved oxygen drops $\ge 50.0\text{ mmol/m}^3$ below the offshore reference median for that latitude band)
 
 ---
 
@@ -49,6 +65,9 @@ copernicusmarine login
 # export COPERNICUSMARINE_SERVICE_USERNAME="your_username"
 # export COPERNICUSMARINE_SERVICE_PASSWORD="your_password"
 ```
+
+### Model Artifacts & Safety
+The model files are pickled scikit-learn objects, to be loaded only from a source you trust, trained with scikit-learn version 1.9.1.
 
 ### Path Configuration
 All scripts import paths from `orca_v2/config.py`. You can override any default path by setting environment variables:
@@ -168,7 +187,7 @@ Comparison of model feature subsets against the historical day-of-year seasonal 
 ## 7. Plain-Language Scientific Limitations (Mandatory)
 
 1. **Rule Labels Are Not Ground Truth**: The upwelling indicators (`upwelling == 1`) are heuristic thresholds defined by oceanographic domain reasoning, not in-situ field measurements or certified ground truth labels. Any ML model trained on them is learning to replicate the rule behavior from ocean features.
-2. **Post-Hoc Threshold Selection**: The exact criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate) were tuned after examining the 2022 Southwest India (Kerala) upwelling event. The $19.5^\circ\text{N}$ cutoff was explicitly added after encountering false-positive triggers in the shallow, high-turbidity waters of the Gulf of Khambhat.
+2. **Post-Hoc Threshold Selection**: The exact criteria ($\ge 1.0^\circ\text{C}$ offshore drop, $\ge 0.5\text{ mmol/m}^3$ nitrate, $\ge 0.5\text{ mg/m}^3$ chlorophyll, and $\le -50.0\text{ mmol/m}^3$ deep oxygen deficit) were tuned after examining the 2022 Southwest India (Kerala) upwelling event. The $19.5^\circ\text{N}$ cutoff was explicitly added after encountering false-positive triggers in the shallow, high-turbidity waters of the Gulf of Khambhat.
 3. **Limited Observational Verification**: The only observational cross-check performed was a 13-year satellite chlorophyll correlation ($r = 0.75$), which represents a limited coastal sample size.
 4. **Model-Estimated Hypoxia**: The `low_oxygen_risk` flag is derived from a numerical reanalysis model, not direct dissolved oxygen sensors. It is **invalid in bathymetry shallower than 50 m** where vertical mixing and bottom boundary processes differ substantially from model assumptions.
 5. **Marine Heatwaves Omitted**: Dedicated marine heatwave (MHW) detection was not implemented due to the lack of an operational 30-year daily climatological baseline required by standard definitions (e.g. Hobday et al.).
