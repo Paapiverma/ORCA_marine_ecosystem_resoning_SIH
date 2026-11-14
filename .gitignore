@@ -9,3 +9,5 @@ __pycache__/
 # Allow committed sample datasets
 !sample_data/*.parquet
 !sample_data/*.csv
+!orca_v2/sample_data/**/*.parquet
+!orca_v2/sample_data/*.parquet
