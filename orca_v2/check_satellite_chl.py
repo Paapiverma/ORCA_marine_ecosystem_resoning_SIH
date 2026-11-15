@@ -7,11 +7,16 @@ Downloads monthly satellite chlorophyll observations from CMEMS:
   Domain: SW Coast box (8.0°N–15.0°N, 72.0°E–77.5°E)
   Period: June–September (JJAS), 2010–2022
 
-Correlates yearly satellite chlorophyll with SW-box upwelling cell-days from year_summary.csv.
+Computes yearly June–September means using two aggregation methods:
+  1. Equal weight per month (Headline): Mean of the 4 monthly spatial box means
+  2. Pooled valid pixels (Sensitivity): Direct unweighted mean of all valid pixel-months
+
+Correlates both series with SW-box upwelling cell-days from year_summary.csv.
 Outputs results to orca_v2/results/satellite_check.csv.
 """
 
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -36,9 +41,17 @@ RAW_DIR = RAW_TEMP_DIR / "satellite_chl"
 
 
 def download_satellite_chl(nc_path: Path) -> Path:
-    """Download monthly satellite chlorophyll NetCDF using copernicusmarine CLI."""
+    """Download monthly satellite chlorophyll NetCDF using copernicusmarine CLI, reusing existing file if present."""
     if nc_path.exists() and nc_path.stat().st_size > 1000:
         print(f"Using existing raw satellite file: {nc_path} ({nc_path.stat().st_size / 1e6:.2f} MB)")
+        return nc_path
+
+    # Check fallback cached location C:\ORCA_TEMP\sat_chl_check.nc
+    fallback_path = Path("C:/ORCA_TEMP/sat_chl_check.nc")
+    if fallback_path.exists() and fallback_path.stat().st_size > 1000:
+        print(f"Reusing existing check file from {fallback_path} -> {nc_path}")
+        nc_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(fallback_path, nc_path)
         return nc_path
 
     nc_path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +82,7 @@ def main() -> None:
     nc_path = RAW_DIR / "satellite_chl_2010_2022_jjas.nc"
     download_satellite_chl(nc_path)
 
-    # 1. Read NetCDF and extract Jun-Sep means per year
+    # 1. Read NetCDF and extract Jun-Sep means per year under both methods
     with nc.Dataset(nc_path, "r") as ds:
         time_var = ds.variables["time"]
         units = time_var.units
@@ -77,14 +90,31 @@ def main() -> None:
         dates = nc.num2date(time_var[:], units, cal)
         chl_data = ds.variables["CHL"][:]
 
-    sat_means = {}
+    rows = []
     for y in YEARS:
-        mask = [bool(d.year == y and d.month in [6, 7, 8, 9]) for d in dates]
-        assert sum(mask) == 4, f"Expected 4 Jun-Sep months for {y}, found {sum(mask)}"
-        chl_y = chl_data[mask, :, :]
-        sat_means[y] = float(np.nanmean(chl_y))
+        m_box_means = []
+        y_valid_pixels = []
+        for m in [6, 7, 8, 9]:
+            matching = [i for i, d in enumerate(dates) if d.year == y and d.month == m]
+            assert len(matching) == 1, f"Expected 1 slice for {y}-{m}, found {len(matching)}"
+            idx_m = matching[0]
+            data_m = chl_data[idx_m, :, :]
+            if hasattr(data_m, "filled"):
+                data_m = data_m.filled(np.nan)
+            valid = data_m[(~np.isnan(data_m)) & (data_m != -999.0)]
+            m_box_means.append(float(np.mean(valid)))
+            y_valid_pixels.extend(valid.tolist())
 
-    df_sat = pd.DataFrame(list(sat_means.items()), columns=["year", "satellite_chl_mean"])
+        mean_equal_month = float(np.mean(m_box_means))
+        mean_pooled_pixels = float(np.mean(y_valid_pixels))
+
+        rows.append({
+            "year": y,
+            "satellite_chl_equal_month": mean_equal_month,
+            "satellite_chl_pooled_pixels": mean_pooled_pixels,
+        })
+
+    df_sat = pd.DataFrame(rows)
 
     # 2. Read year_summary.csv
     summary_path = RESULTS_DIR / "year_summary.csv"
@@ -99,9 +129,14 @@ def main() -> None:
         how="inner",
     ).sort_values("year")
 
-    # 3. Correlations
-    p_corr, p_val = pearsonr(merged["sw_upw_cell_days"], merged["satellite_chl_mean"])
-    s_corr, s_val = spearmanr(merged["sw_upw_cell_days"], merged["satellite_chl_mean"])
+    # 3. Correlations for both methods
+    # Method 1: Equal month (Headline)
+    p_corr_a, p_val_a = pearsonr(merged["sw_upw_cell_days"], merged["satellite_chl_equal_month"])
+    s_corr_a, s_val_a = spearmanr(merged["sw_upw_cell_days"], merged["satellite_chl_equal_month"])
+
+    # Method 2: Pooled pixels (Sensitivity)
+    p_corr_b, p_val_b = pearsonr(merged["sw_upw_cell_days"], merged["satellite_chl_pooled_pixels"])
+    s_corr_b, s_val_b = spearmanr(merged["sw_upw_cell_days"], merged["satellite_chl_pooled_pixels"])
 
     # 4. Save results CSV
     merged.to_csv(OUT_CSV, index=False)
@@ -111,8 +146,8 @@ def main() -> None:
     print("\n=== SATELLITE CHLOROPHYLL vs UPWELLING CELL-DAYS (SW Box: 8-15°N, 72-77.5°E, Jun-Sep) ===")
     print(merged.to_string(index=False))
     print("\nCorrelations (13 yearly pairs, 2010–2022):")
-    print(f"  Pearson  r = {p_corr:.4f} (p = {p_val:.4e})")
-    print(f"  Spearman r = {s_corr:.4f} (p = {s_val:.4e})")
+    print(f"  Headline (Equal weight per month):  Pearson r = {p_corr_a:.4f} (p = {p_val_a:.4e}), Spearman r = {s_corr_a:.4f} (p = {s_val_a:.4e})")
+    print(f"  Sensitivity (Pooled valid pixels):  Pearson r = {p_corr_b:.4f} (p = {p_val_b:.4e}), Spearman r = {s_corr_b:.4f} (p = {s_val_b:.4e})")
 
 
 if __name__ == "__main__":
