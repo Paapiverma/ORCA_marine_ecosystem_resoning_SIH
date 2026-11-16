@@ -1,3 +1,5 @@
+"""Ablation studies, per-year evaluations, and horizon sweeps for onset forecast robustness. Run: python forecast4_robustness_test.py"""
+
 import gc
 from pathlib import Path
 import sys
@@ -23,28 +25,28 @@ OCEAN_COLS = ["thetao", "no3", "chl", "sla", "o2_50_150m", "uo", "vo"]
 RULES_COLS = ["time", "latitude", "longitude", "is_coastal", "excluded_north", "ref_thetao", "upwelling"]
 
 ALL_FEATURE_NAMES = [
-    "thetao_minus_ref",     # 0
-    "no3",                  # 1
-    "chl",                  # 2
-    "sla",                  # 3
-    "o2_50_150m",           # 4
-    "uo",                   # 5
-    "vo",                   # 6
-    "d3_thetao",            # 7
-    "d3_no3",               # 8
-    "d3_chl",               # 9
-    "upw_d1",               # 10
-    "upw_d2",               # 11
-    "upw_d3",               # 12
-    "days_since_flagged",   # 13
-    "w5_upw_frac",          # 14
-    "d3_w5_upw_frac",       # 15
-    "w5_thetao_minus_ref",  # 16
-    "latitude",             # 17
-    "longitude",            # 18
-    "is_coastal",           # 19
-    "sin_doy",              # 20
-    "cos_doy",              # 21
+    "thetao_minus_ref",
+    "no3",
+    "chl",
+    "sla",
+    "o2_50_150m",
+    "uo",
+    "vo",
+    "d3_thetao",
+    "d3_no3",
+    "d3_chl",
+    "upw_d1",
+    "upw_d2",
+    "upw_d3",
+    "days_since_flagged",
+    "w5_upw_frac",
+    "d3_w5_upw_frac",
+    "w5_thetao_minus_ref",
+    "latitude",
+    "longitude",
+    "is_coastal",
+    "sin_doy",
+    "cos_doy",
 ]
 
 # Feature variants
@@ -59,7 +61,6 @@ SWEEP_HORIZONS = (1, 3, 5, 7, 10, 15)
 
 
 def log_progress(msg: str) -> None:
-    """Print progress line with timestamp and append to run_log.txt."""
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     print(line, flush=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -67,7 +68,6 @@ def log_progress(msg: str) -> None:
 
 
 def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
-    """Map dates to 0-based no-leap day index (0..364) and leap-day mask (Feb 29)."""
     is_feb29 = np.asarray((dates.month == 2) & (dates.day == 29), dtype=bool)
     raw_doy = dates.dayofyear.to_numpy(dtype=np.int64)
     shift = (dates.is_leap_year & (raw_doy > 60)).astype(np.int64)
@@ -76,7 +76,6 @@ def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.nd
 
 
 def load_data() -> dict:
-    """Load continuous 2010-2025 ocean & rules data, spatial mapping, and precomputed window features."""
     log_progress("START: loading data (2010-2025 continuous)")
     t0 = time.time()
 
@@ -153,6 +152,7 @@ def load_data() -> dict:
 
         th_2d = th_full[:, keep_lat]
         ref_2d = ref_full[:, keep_lat]
+
         arrays_lists["thetao"].append(th_2d)
         arrays_lists["thetao_minus_ref"].append((th_2d - ref_2d).astype(np.float32))
 
@@ -260,7 +260,6 @@ def load_data() -> dict:
 
 
 def build_features_indexed(data: dict, d_idx: np.ndarray, c_idx: np.ndarray, feat_indices: list[int] = None) -> np.ndarray:
-    """Assemble float32 feature matrix for selected (day, cell) indices, filtered by feat_indices."""
     assert np.all(d_idx >= 3), "D-3 lag requires day index >= 3"
     N = len(d_idx)
 
@@ -271,40 +270,32 @@ def build_features_indexed(data: dict, d_idx: np.ndarray, c_idx: np.ndarray, fea
     if feat_indices is None:
         feat_indices = V3_INDICES
 
-    # Pre-allocate full 22-column matrix
     X_full = np.empty((N, 22), dtype=np.float32)
 
-    # 0..6: thetao_minus_ref, no3, chl, sla, o2_50_150m, uo, vo
     col_i = 0
     for col in ("thetao_minus_ref", "no3", "chl", "sla", "o2_50_150m", "uo", "vo"):
         X_full[:, col_i] = arrays[col][d_idx, c_idx]
         col_i += 1
 
-    # 7..9: D-3 to D changes for thetao, no3, chl
     for col in ("thetao", "no3", "chl"):
         X_full[:, col_i] = arrays[col][d_idx, c_idx] - arrays[col][d_idx - 3, c_idx]
         col_i += 1
 
-    # 10..12: Upwelling lags D-1, D-2, D-3
     for lag in (1, 2, 3):
         X_full[:, col_i] = upw[d_idx - lag, c_idx].astype(np.float32)
         col_i += 1
 
-    # 13: Days since last flagged (cap 30)
     X_full[:, col_i] = data["days_since_flagged"][d_idx, c_idx]
     col_i += 1
 
-    # 14..15: 5x5 window upwelling fraction at D and change from D-3 to D
     X_full[:, col_i] = w5_upw[d_idx, c_idx]
     col_i += 1
     X_full[:, col_i] = w5_upw[d_idx, c_idx] - w5_upw[d_idx - 3, c_idx]
     col_i += 1
 
-    # 16: Mean thetao - ref_thetao in 5x5 window at D
     X_full[:, col_i] = data["w5_thetao_minus_ref"][d_idx, c_idx]
     col_i += 1
 
-    # 17..21: Spatial and calendar coordinates
     X_full[:, col_i] = data["lat"][c_idx]
     col_i += 1
     X_full[:, col_i] = data["lon"][c_idx]
@@ -323,7 +314,6 @@ def build_features_indexed(data: dict, d_idx: np.ndarray, c_idx: np.ndarray, fea
 
 
 def select_best_f1_cutoff(y_true: np.ndarray, probs: np.ndarray) -> tuple[float, float]:
-    """Return probability cutoff maximizing F1 on validation set."""
     prec, rec, thresh = precision_recall_curve(y_true, probs)
     p, r = prec[:-1], rec[:-1]
     denom = p + r
@@ -343,7 +333,6 @@ def train_and_eval_variant(
     target_test_idx: np.ndarray,
     idx_2017_end: int,
 ) -> tuple[np.ndarray, np.ndarray, float, float]:
-    """Train variant on 2010-2017, tune cutoff on 2018-2019, predict on 2020-2025."""
     log_progress(f"START: training {feat_name} for h={h} ({len(feat_indices)} features)")
     t0 = time.time()
     dates = data["dates"]
@@ -423,7 +412,6 @@ def train_and_eval_variant(
         gc.collect()
         log_progress(f"END: training {feat_name} h={h} (stride=8) complete")
 
-    # Validation on 2018-2019 (all rows with upw[D] == 0)
     log_progress(f"START: evaluating {feat_name} validation (2018-2019) for h={h}")
     d_val_all = target_1819_idx - h
     p_val_list = []
@@ -458,7 +446,6 @@ def train_and_eval_variant(
     gc.collect()
     log_progress(f"END: validation for {feat_name} h={h} (cutoff={cutoff:.4f}, val_F1={val_f1:.4f})")
 
-    # Predict test set on 2020-2025 (all rows with upw[D] == 0)
     log_progress(f"START: predicting test set (2020-2025) for {feat_name} h={h}")
     d_test_all = target_test_idx - h
     scores_test_list = []
@@ -487,7 +474,6 @@ def train_and_eval_variant(
 
 
 def extract_test_ground_truth_and_baselines(data: dict, h: int, target_test_idx: np.ndarray) -> dict:
-    """Extract y_true, dates, and baseline scores for test set rows where upw[D] == 0."""
     log_progress(f"START: extracting ground truth and baselines for test set h={h}")
     t0 = time.time()
     dates = data["dates"]
@@ -564,38 +550,29 @@ def main() -> None:
     target_1819_idx = np.where(np.isin(dates.year, [2018, 2019]))[0]
     target_test_idx = np.where(np.isin(dates.year, range(2020, 2026)))[0]
 
-    # Tables to collect
     ablation_rows = []
     per_year_rows = []
     horizon_sweep_rows = []
 
-    # Dictionary to cache V3 test scores and test info for h in SWEEP_HORIZONS
     v3_cache = {}
 
-    # -----------------------------------------------------------------
-    # Part B & Part C: Ablations and Per-Year for h=3 and h=5
-    # -----------------------------------------------------------------
     for h in (3, 5):
         log_progress(f"\n{'='*70}\nSTART: Horizon h={h} Processing (Part B & C)\n{'='*70}")
         test_info = extract_test_ground_truth_and_baselines(data, h, target_test_idx)
 
-        # 1. Train and evaluate V1 (Calendar + Location)
         scores_v1, cutoff_v1, val_f1_v1 = train_and_eval_variant(
             data, h, "V1_Calendar_Location", V1_INDICES, target_1819_idx, target_test_idx, idx_2017_end
         )
 
-        # 2. Train and evaluate V2 (Minus Rule Ingredients)
         scores_v2, cutoff_v2, val_f1_v2 = train_and_eval_variant(
             data, h, "V2_Minus_Rules", V2_INDICES, target_1819_idx, target_test_idx, idx_2017_end
         )
 
-        # 3. Train and evaluate V3 (Full Model)
         scores_v3, cutoff_v3, val_f1_v3 = train_and_eval_variant(
             data, h, "V3_Full_Model", V3_INDICES, target_1819_idx, target_test_idx, idx_2017_end
         )
         v3_cache[h] = {"scores": scores_v3, "test_info": test_info}
 
-        # Evaluate Part B: 2020-2025 Jun-Sep
         mask_js_2025 = np.isin(test_info["month"], [6, 7, 8, 9])
         yt_js = test_info["y_true"][mask_js_2025]
         s_sea_js = test_info["season"][mask_js_2025]
@@ -628,7 +605,6 @@ def main() -> None:
         del scores_v1, scores_v2
         gc.collect()
 
-        # Evaluate Part C: Per-Year Breakdown for V3 and Season (Jun-Sep, each of 2020..2025)
         for yr in (2020, 2021, 2022, 2023, 2024, 2025):
             mask_yr = (test_info["year"] == yr) & np.isin(test_info["month"], [6, 7, 8, 9])
             yt_yr = test_info["y_true"][mask_yr]
@@ -655,9 +631,6 @@ def main() -> None:
                 }
             )
 
-    # -----------------------------------------------------------------
-    # Part D: Horizon Sweep for V3 (h = 1, 3, 5, 7, 10, 15)
-    # -----------------------------------------------------------------
     log_progress(f"\n{'='*70}\nSTART: Part D Horizon Sweep for V3\n{'='*70}")
     for h in SWEEP_HORIZONS:
         if h in v3_cache:
@@ -692,7 +665,6 @@ def main() -> None:
             }
         )
 
-    # Convert to DataFrames and save
     df_ablation = pd.DataFrame(ablation_rows)
     df_per_year = pd.DataFrame(per_year_rows)
     df_sweep = pd.DataFrame(horizon_sweep_rows)
@@ -716,14 +688,11 @@ def main() -> None:
     log_progress("=" * 80)
     print(df_sweep.to_string(index=False, float_format=lambda x: f"{x:.4f}"), flush=True)
 
-    # -----------------------------------------------------------------
-    # PASS / FAIL Evaluation
-    # -----------------------------------------------------------------
     log_progress("\n" + "=" * 80)
     log_progress("=== PASS / FAIL CHECKS ===")
     log_progress("=" * 80)
 
-    # (a) V3 AP >= 1.25 x V1 AP at h=3 and h=5
+    # Check (a): V3 AP >= 1.25 x V1 AP at h=3 and h=5
     pass_a = True
     for h in (3, 5):
         row = df_ablation[df_ablation["horizon_days"] == h].iloc[0]
@@ -735,7 +704,7 @@ def main() -> None:
             f"Ratio={row['ratio_v3_vs_v1']:.3f}x (req >= 1.250x)"
         )
 
-    # (b) V3 AP > Season baseline in each of the six test years at h=3 and h=5
+    # Check (b): V3 AP > Season baseline in each of the six test years at h=3 and h=5
     pass_b = True
     for h in (3, 5):
         sub_yr = df_per_year[df_per_year["horizon_days"] == h]

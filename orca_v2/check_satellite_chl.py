@@ -1,19 +1,4 @@
-"""
-Satellite Chlorophyll Validation Check (2010–2022).
-
-Downloads monthly satellite chlorophyll observations from CMEMS:
-  Dataset: cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M
-  Variable: CHL
-  Domain: SW Coast box (8.0°N–15.0°N, 72.0°E–77.5°E)
-  Period: June–September (JJAS), 2010–2022
-
-Computes yearly June–September means using two aggregation methods:
-  1. Equal weight per month (Headline): Mean of the 4 monthly spatial box means
-  2. Pooled valid pixels (Sensitivity): Direct unweighted mean of all valid pixel-months
-
-Correlates both series with SW-box upwelling cell-days from year_summary.csv.
-Outputs results to orca_v2/results/satellite_check.csv.
-"""
+"""Validate model upwelling against satellite chlorophyll observations (2010-2022). Run: python check_satellite_chl.py"""
 
 from pathlib import Path
 import shutil
@@ -41,12 +26,11 @@ RAW_DIR = RAW_TEMP_DIR / "satellite_chl"
 
 
 def download_satellite_chl(nc_path: Path) -> Path:
-    """Download monthly satellite chlorophyll NetCDF using copernicusmarine CLI, reusing existing file if present."""
     if nc_path.exists() and nc_path.stat().st_size > 1000:
         print(f"Using existing raw satellite file: {nc_path} ({nc_path.stat().st_size / 1e6:.2f} MB)")
         return nc_path
 
-    # Check fallback cached location C:\ORCA_TEMP\sat_chl_check.nc
+    # Fallback cached file location.
     fallback_path = Path("C:/ORCA_TEMP/sat_chl_check.nc")
     if fallback_path.exists() and fallback_path.stat().st_size > 1000:
         print(f"Reusing existing check file from {fallback_path} -> {nc_path}")
@@ -82,7 +66,7 @@ def main() -> None:
     nc_path = RAW_DIR / "satellite_chl_2010_2022_jjas.nc"
     download_satellite_chl(nc_path)
 
-    # 1. Read NetCDF and extract Jun-Sep means per year under both methods
+    # Extract Jun-Sep means under equal-month and pooled-pixel methods.
     with nc.Dataset(nc_path, "r") as ds:
         time_var = ds.variables["time"]
         units = time_var.units
@@ -116,7 +100,6 @@ def main() -> None:
 
     df_sat = pd.DataFrame(rows)
 
-    # 2. Read year_summary.csv
     summary_path = RESULTS_DIR / "year_summary.csv"
     if not summary_path.exists():
         raise FileNotFoundError(f"Missing {summary_path}")
@@ -129,20 +112,17 @@ def main() -> None:
         how="inner",
     ).sort_values("year")
 
-    # 3. Correlations for both methods
-    # Method 1: Equal month (Headline)
+    # Equal weight per month (headline).
     p_corr_a, p_val_a = pearsonr(merged["sw_upw_cell_days"], merged["satellite_chl_equal_month"])
     s_corr_a, s_val_a = spearmanr(merged["sw_upw_cell_days"], merged["satellite_chl_equal_month"])
 
-    # Method 2: Pooled pixels (Sensitivity)
+    # Pooled valid pixels (sensitivity).
     p_corr_b, p_val_b = pearsonr(merged["sw_upw_cell_days"], merged["satellite_chl_pooled_pixels"])
     s_corr_b, s_val_b = spearmanr(merged["sw_upw_cell_days"], merged["satellite_chl_pooled_pixels"])
 
-    # 4. Save results CSV
     merged.to_csv(OUT_CSV, index=False)
     print(f"\nSaved 13-row validation table to: {OUT_CSV}")
 
-    # 5. Print table and summary
     print("\n=== SATELLITE CHLOROPHYLL vs UPWELLING CELL-DAYS (SW Box: 8-15°N, 72-77.5°E, Jun-Sep) ===")
     print(merged.to_string(index=False))
     print("\nCorrelations (13 yearly pairs, 2010–2022):")

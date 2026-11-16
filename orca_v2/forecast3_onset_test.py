@@ -1,3 +1,5 @@
+"""Evaluate gradient boosted trees and baselines for onset forecasting (h=1,3,5). Run: python forecast3_onset_test.py"""
+
 import gc
 from pathlib import Path
 import sys
@@ -51,7 +53,6 @@ FEATURE_NAMES = [
 
 
 def log_progress(msg: str) -> None:
-    """Print progress line with timestamp and append to run_log.txt."""
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     print(line, flush=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -59,7 +60,6 @@ def log_progress(msg: str) -> None:
 
 
 def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
-    """Map dates to 0-based no-leap day index (0..364) and leap-day mask (Feb 29)."""
     is_feb29 = np.asarray((dates.month == 2) & (dates.day == 29), dtype=bool)
     raw_doy = dates.dayofyear.to_numpy(dtype=np.int64)
     shift = (dates.is_leap_year & (raw_doy > 60)).astype(np.int64)
@@ -68,11 +68,9 @@ def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.nd
 
 
 def load_data() -> dict:
-    """Load continuous 2010-2025 ocean & rules data, spatial mapping, and precomputed window features."""
     log_progress("START: loading data (2010-2025 continuous)")
     t0 = time.time()
 
-    # Anchor grid and spatial mapping
     d0 = pd.read_parquet(
         LONG_DIR / "rules_v3c_2022.parquet",
         columns=["time", "latitude", "longitude", "is_coastal", "excluded_north"],
@@ -90,7 +88,6 @@ def load_data() -> dict:
     lon_vec = lons_all[keep_lat]
     coastal_vec = d0["is_coastal"].to_numpy(dtype=np.float32)[keep_lat]
 
-    # Map coordinates to 2D regular grid (169 x 157)
     unique_lats = np.sort(np.unique(lats_all))
     unique_lons = np.sort(np.unique(lons_all))
     lat_to_r = {lat: i for i, lat in enumerate(unique_lats)}
@@ -107,7 +104,7 @@ def load_data() -> dict:
     ocean_mask = np.zeros((n_r, n_c), dtype=np.float32)
     ocean_mask[r_all, c_all] = 1.0
 
-    # 5x5 ocean cell counts
+    # Number of valid ocean cells in each 5x5 window.
     ocean_count_5x5 = scipy.ndimage.uniform_filter(ocean_mask, size=5, mode="constant", cval=0.0)
     ocean_count_sub = ocean_count_5x5[r_sub, c_sub]
     ocean_count_sub = np.maximum(ocean_count_sub, 1e-6)
@@ -148,6 +145,7 @@ def load_data() -> dict:
 
         th_2d = th_full[:, keep_lat]
         ref_2d = ref_full[:, keep_lat]
+
         arrays_lists["thetao"].append(th_2d)
         arrays_lists["thetao_minus_ref"].append((th_2d - ref_2d).astype(np.float32))
 
@@ -186,13 +184,11 @@ def load_data() -> dict:
 
     grid_buf = np.zeros((n_r, n_c), dtype=np.float32)
     for t in range(n_days_total):
-        # 5x5 upwelling fraction
         grid_buf.fill(0.0)
         grid_buf[r_all, c_all] = upw_all_full[t]
         conv_u = scipy.ndimage.uniform_filter(grid_buf, size=5, mode="constant", cval=0.0)
         w5_upw_frac[t] = conv_u[r_sub, c_sub] / ocean_count_sub
 
-        # 5x5 mean thetao - ref_thetao
         grid_buf.fill(0.0)
         grid_buf[r_all, c_all] = th_minus_ref_all_full[t]
         conv_th = scipy.ndimage.uniform_filter(grid_buf, size=5, mode="constant", cval=0.0)
@@ -202,7 +198,7 @@ def load_data() -> dict:
     gc.collect()
     log_progress(f"END: 5x5 spatial window features precomputed in {time.time() - t_win0:.1f}s")
 
-    # Precompute days since last flagged (cap 30)
+    # Days since last flagged, capped at 30.
     log_progress("START: precomputing days since last flagged (cap 30)")
     t_ds0 = time.time()
     days_since_flagged = np.full((n_days_total, n_sub), 30.0, dtype=np.float32)
@@ -210,14 +206,14 @@ def load_data() -> dict:
         days_since_flagged[t] = np.where(upw[t - 1] == 1, 1.0, np.minimum(30.0, days_since_flagged[t - 1] + 1.0))
     log_progress(f"END: days since last flagged precomputed in {time.time() - t_ds0:.1f}s")
 
-    # Precompute season climatology (2010-2017) with +/- 7 days circular window
+    # Training climatology (2010-2017) smoothed with +/-7-day circular window.
     log_progress("START: precomputing season baseline climatology (2010-2017)")
     train_year_mask = np.isin(dates.year, range(2010, 2018))
     train_dates = dates[train_year_mask]
     train_upw = upw[train_year_mask]
 
     t_doy_idx, t_is_feb29 = map_timestamps_to_doy365(train_dates)
-    t_doy_idx[t_is_feb29] = 59  # map Feb 29 to Feb 28
+    t_doy_idx[t_is_feb29] = 59  # Map Feb 29 to day index 58 (Feb 28).
 
     sums_doy = np.zeros((365, n_sub), dtype=np.float64)
     counts_doy = np.zeros(365, dtype=np.int64)
@@ -236,7 +232,6 @@ def load_data() -> dict:
     season_clim = (win_sums / win_counts[:, None]).astype(np.float32)
     log_progress("END: season baseline climatology precomputed")
 
-    # Map entire dates array to 0..364 for climatology indexing
     all_doy_idx, all_is_feb29 = map_timestamps_to_doy365(dates)
     all_doy_idx[all_is_feb29] = 59
 
@@ -260,7 +255,6 @@ def load_data() -> dict:
 
 
 def build_features_indexed(data: dict, d_idx: np.ndarray, c_idx: np.ndarray) -> np.ndarray:
-    """Assemble (N, 22) float32 feature matrix directly for selected (day, cell) indices."""
     assert np.all(d_idx >= 3), "D-3 lag requires day index >= 3"
     N = len(d_idx)
     X = np.empty((N, len(FEATURE_NAMES)), dtype=np.float32)
@@ -269,37 +263,30 @@ def build_features_indexed(data: dict, d_idx: np.ndarray, c_idx: np.ndarray) -> 
     upw = data["upw"]
     w5_upw = data["w5_upw_frac"]
 
-    # 1. Continuous core variables: thetao_minus_ref, no3, chl, sla, o2_50_150m, uo, vo
     col_i = 0
     for col in ("thetao_minus_ref", "no3", "chl", "sla", "o2_50_150m", "uo", "vo"):
         X[:, col_i] = arrays[col][d_idx, c_idx]
         col_i += 1
 
-    # 2. D-3 to D changes for thetao, no3, chl
     for col in ("thetao", "no3", "chl"):
         X[:, col_i] = arrays[col][d_idx, c_idx] - arrays[col][d_idx - 3, c_idx]
         col_i += 1
 
-    # 3. Upwelling lags: D-1, D-2, D-3
     for lag in (1, 2, 3):
         X[:, col_i] = upw[d_idx - lag, c_idx].astype(np.float32)
         col_i += 1
 
-    # 4. Days since last flagged (cap 30)
     X[:, col_i] = data["days_since_flagged"][d_idx, c_idx]
     col_i += 1
 
-    # 5. 5x5 window upwelling fraction at D and change from D-3 to D
     X[:, col_i] = w5_upw[d_idx, c_idx]
     col_i += 1
     X[:, col_i] = w5_upw[d_idx, c_idx] - w5_upw[d_idx - 3, c_idx]
     col_i += 1
 
-    # 6. Mean thetao - ref_thetao in 5x5 window at D
     X[:, col_i] = data["w5_thetao_minus_ref"][d_idx, c_idx]
     col_i += 1
 
-    # 7. Spatial and calendar coordinates
     X[:, col_i] = data["lat"][c_idx]
     col_i += 1
     X[:, col_i] = data["lon"][c_idx]
@@ -316,7 +303,6 @@ def build_features_indexed(data: dict, d_idx: np.ndarray, c_idx: np.ndarray) -> 
 
 
 def select_best_f1_cutoff(y_true: np.ndarray, probs: np.ndarray) -> tuple[float, float]:
-    """Return probability cutoff maximizing F1 on validation set."""
     prec, rec, thresh = precision_recall_curve(y_true, probs)
     p, r = prec[:-1], rec[:-1]
     denom = p + r
@@ -358,9 +344,6 @@ def main() -> None:
         log_progress(f"START: processing horizon h={h}")
         t_h = time.time()
 
-        # -------------------------------------------------------------
-        # 1. Training on 2010-2017 (stride 4, fallback 8)
-        # -------------------------------------------------------------
         train_stride = 4
         try:
             log_progress(f"START: preparing training rows (stride={train_stride}, keep positives + 10% negatives)")
@@ -438,9 +421,6 @@ def main() -> None:
             gc.collect()
             log_progress(f"END: training HistGradientBoostingClassifier h={h} (stride=8) complete")
 
-        # -------------------------------------------------------------
-        # 2. Validation & Cutoff Tuning on 2018-2019 (all rows with upw[D] == 0)
-        # -------------------------------------------------------------
         log_progress(f"START: predicting validation set (2018-2019, all rows with flag at D=0) for h={h}")
         d_val_all = target_1819_idx - h
         p_val_list = []
@@ -473,9 +453,6 @@ def main() -> None:
         cutoff, val_f1 = select_best_f1_cutoff(y_val, p_val)
         log_progress(f"END: validation complete for h={h} (rows={len(y_val):,}, cutoff={cutoff:.4f}, val_F1={val_f1:.4f})")
 
-        # -------------------------------------------------------------
-        # 3. Permutation Importance on 2018-2019 (50k random rows)
-        # -------------------------------------------------------------
         log_progress(f"START: permutation importance h={h} (50k rows, 2018-2019)")
         rng = np.random.default_rng(42)
         sample_d_val = rng.choice(d_val_all, size=min(len(d_val_all), 15), replace=False)
@@ -508,9 +485,6 @@ def main() -> None:
         gc.collect()
         log_progress(f"END: permutation importance complete for h={h}")
 
-        # -------------------------------------------------------------
-        # 4. Test Evaluation on 2020-2025 (all rows with upw[D] == 0)
-        # -------------------------------------------------------------
         log_progress(f"START: evaluating test set (2020-2025, all rows with flag at D=0) for h={h}")
         d_test_all = target_test_idx - h
 
@@ -577,7 +551,6 @@ def main() -> None:
         del y_test_list, year_list, month_list
         gc.collect()
 
-        # Evaluate across the 3 periods and 2 subsets
         for period_name, p_years in PERIOD_DEFS:
             p_mask = np.isin(years_all, p_years)
             for subset_name in ("Jun-Sep", "All days"):
@@ -596,7 +569,6 @@ def main() -> None:
                 N_eval = len(yt)
                 base_rate = float(yt.mean()) if N_eval > 0 else 0.0
 
-                # 1. Average Precision
                 ap_model = float(average_precision_score(yt, sm)) if N_eval > 0 else 0.0
                 ap_season = float(average_precision_score(yt, ss)) if N_eval > 0 else 0.0
                 ap_spreading = float(average_precision_score(yt, sp)) if N_eval > 0 else 0.0
@@ -605,7 +577,6 @@ def main() -> None:
                 best_baseline_ap = max(ap_season, ap_spreading, ap_flicker)
                 ap_ratio = ap_model / best_baseline_ap if best_baseline_ap > 0 else 0.0
 
-                # 2. Threshold metrics at 2018-2019 cutoff
                 preds = (sm >= cutoff).astype(np.int8)
                 onset_events = int(yt.sum())
                 alarms_raised = int(preds.sum())
@@ -614,7 +585,7 @@ def main() -> None:
                 recall = tp / onset_events if onset_events > 0 else 0.0
                 f1 = 2.0 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
-                # 3. Lift: precision of top 1% scored cell-days / base_rate
+                # Lift: precision of top 1% scored cell-days / base_rate
                 K = max(1, int(round(0.01 * N_eval)))
                 top1_idx = np.argsort(sm)[::-1][:K]
                 prec_top1 = float(yt[top1_idx].mean())

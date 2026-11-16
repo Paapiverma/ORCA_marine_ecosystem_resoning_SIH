@@ -1,3 +1,5 @@
+"""Compute 15-day rolling DOY climatology and anomalies for 2022-2025. Run: python build_merged_v4.py"""
+
 from pathlib import Path
 import time
 
@@ -14,7 +16,6 @@ N_CELLS = 18650
 N_DOY = 365
 ROLL_HALF = 7  # 15-day centered circular window: [-7 .. +7]
 
-# Source column -> output anomaly column
 ANOM_SPECS = (
     ("thetao", "thetao_anom", "degrees_C", "0-50m temperature"),
     ("chl", "chl_anom", "mg m-3", "0-50m chlorophyll-a"),
@@ -24,11 +25,7 @@ ANOM_SPECS = (
 
 
 def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
-    """Map dates to 0-based no-leap day index (0..364) and leap-day mask (Feb 29).
-
-    Non-Feb-29 dates in leap years shift back by 1 after Feb 29 so Mar 1 = idx 59
-    and Dec 31 = idx 364 across all years.
-    """
+    # Non-Feb-29 dates in leap years shift back by 1 after Feb 29 so Mar 1 = idx 59 across all years.
     is_feb29 = np.asarray((dates.month == 2) & (dates.day == 29), dtype=bool)
     raw_doy = dates.dayofyear.to_numpy(dtype=np.int64)
     shift = (dates.is_leap_year & (raw_doy > 60)).astype(np.int64)
@@ -37,7 +34,6 @@ def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.nd
 
 
 def compute_climatologies() -> tuple[dict[str, np.ndarray], np.ndarray]:
-    """Compute smoothed 365-day DOY climatology (shape 365 x 18650) per variable."""
     src_cols = [s[0] for s in ANOM_SPECS]
     sums = {col: np.zeros((N_DOY, N_CELLS), dtype=np.float64) for col in src_cols}
     counts = {col: np.zeros((N_DOY, N_CELLS), dtype=np.int64) for col in src_cols}
@@ -85,7 +81,6 @@ def compute_climatologies() -> tuple[dict[str, np.ndarray], np.ndarray]:
 
 
 def climatology_for_dates(clim: np.ndarray, dates: pd.DatetimeIndex) -> np.ndarray:
-    """Lookup (n_days, 18650) climatology; Feb 29 uses midpoint of smoothed day 59 & 60."""
     doy_idx, is_feb29 = map_timestamps_to_doy365(dates)
     out = clim[doy_idx].copy()
     if is_feb29.any():
@@ -95,7 +90,6 @@ def climatology_for_dates(clim: np.ndarray, dates: pd.DatetimeIndex) -> np.ndarr
 
 
 def write_units_txt(in_units: Path, out_units: Path) -> None:
-    """Copy V3 units metadata and append V4 anomaly column definitions."""
     lines = in_units.read_text(encoding="utf-8").splitlines()
     if lines and "MERGED_V3" in lines[0]:
         lines[0] = lines[0].replace("MERGED_V3", "MERGED_V4")

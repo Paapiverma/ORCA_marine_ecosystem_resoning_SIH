@@ -1,13 +1,4 @@
-"""
-Build ONE year long-record Copernicus ocean dataset and comparison pipeline.
-
-Products:
-  - Physics: cmems_mod_glo_phy_my_0.083deg_P1D-m (thetao, so, uo, vo, depth 0-50m)
-  - Biogeochemistry: cmems_mod_glo_bgc_my_0.25deg_P1D-m (chl, no3, o2, po4, depth 0-200m)
-  - Sea level: cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D (sla)
-
-Region: 8.0 to 22.0 N, 65.0 to 78.0 E
-"""
+"""Build long-record Copernicus ocean dataset and comparison for a given year. Run: python build_long_year.py <year>"""
 
 import argparse
 import os
@@ -21,7 +12,6 @@ import pandas as pd
 from scipy.spatial import cKDTree
 import xarray as xr
 
-# Constants
 EARTH_RADIUS_KM = 6371.0
 COAST_KM = 20.0
 MAX_FILL_KM = 25.0
@@ -49,7 +39,6 @@ except ImportError:
 
 
 def check_copernicus_credentials():
-    """Verify copernicusmarine credentials without logging or exposing secrets."""
     import subprocess
     cmd = ["copernicusmarine", "login", "--check-credentials-valid"]
     try:
@@ -62,7 +51,6 @@ def check_copernicus_credentials():
 
 
 def latlon_to_xyz_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
-    """Convert lat/lon degrees to 3D Cartesian coordinates (km) on sphere."""
     lat_r = np.radians(lat.astype(np.float64))
     lon_r = np.radians(lon.astype(np.float64))
     cos_lat = np.cos(lat_r)
@@ -74,7 +62,6 @@ def latlon_to_xyz_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
 
 
 def download_year_raw(year: int, raw_dir: Path) -> dict:
-    """Download physics, bgc, and sla datasets for the specified year using copernicusmarine."""
     import copernicusmarine
 
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +74,7 @@ def download_year_raw(year: int, raw_dir: Path) -> dict:
 
     download_stats = {}
 
-    # 1. Physics (0.083 deg, thetao, so, uo, vo, depth 0-50m)
+    # Physics: 0.083 deg, thetao, so, uo, vo, depth 0-50m.
     print(f"\n[1/3] Downloading Physics (cmems_mod_glo_phy_my_0.083deg_P1D-m) for {year}...")
     t0 = time.time()
     res_p = copernicusmarine.subset(
@@ -111,7 +98,7 @@ def download_year_raw(year: int, raw_dir: Path) -> dict:
     print(f"Physics downloaded: {phys_sz / 1e6:.2f} MB in {t_phys:.1f}s")
     download_stats["physics"] = {"file": phys_file, "size_bytes": phys_sz, "time_s": t_phys}
 
-    # 2. Biogeochemistry (0.25 deg, chl, no3, o2, po4, depth 0-200m)
+    # Biogeochemistry: 0.25 deg, chl, no3, o2, po4, depth 0-200m.
     print(f"\n[2/3] Downloading BGC (cmems_mod_glo_bgc_my_0.25deg_P1D-m) for {year}...")
     t0 = time.time()
     res_b = copernicusmarine.subset(
@@ -135,7 +122,7 @@ def download_year_raw(year: int, raw_dir: Path) -> dict:
     print(f"BGC downloaded: {bgc_sz / 1e6:.2f} MB in {t_bgc:.1f}s")
     download_stats["bgc"] = {"file": bgc_file, "size_bytes": bgc_sz, "time_s": t_bgc}
 
-    # 3. Sea level anomaly (0.125 deg, sla)
+    # Sea level anomaly: 0.125 deg, sla.
     print(f"\n[3/3] Downloading Sea Level (cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D) for {year}...")
     t0 = time.time()
     res_s = copernicusmarine.subset(
@@ -161,7 +148,6 @@ def download_year_raw(year: int, raw_dir: Path) -> dict:
 
 
 def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path) -> pd.DataFrame:
-    """Exact logic of build_merged_v2.py (0-50m mean, regridding to 1/12 deg, o2_50_150m mean)."""
     t0 = time.time()
     print("Loading & 0-50m averaging physics...")
     with xr.open_dataset(phys_file) as ds_p:
@@ -171,7 +157,7 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path) -> pd.Dat
     land_mask = np.isnan(p_surf['thetao'].values)
     print(f"Physics ready in {time.time()-t0:.1f}s. Grid: {len(target_lat)} lats x {len(target_lon)} lons.")
 
-    # Surface BGC (0-50m mean)
+    # 0-50m depth average.
     t_step = time.time()
     print("Loading & regridding surface BGC (chl, no3, o2, po4 0-50m)...")
     with xr.open_dataset(bgc_file) as ds_b:
@@ -183,7 +169,7 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path) -> pd.Dat
         b_regrid[v].values = arr
     print(f"Surface BGC ready in {time.time()-t_step:.1f}s.")
 
-    # Deep BGC Oxygen (50-150m mean)
+    # 50-150m depth average for deep oxygen.
     t_step = time.time()
     print("Loading & regridding deep BGC oxygen (50-150m)...")
     with xr.open_dataset(bgc_file) as ds_b:
@@ -195,7 +181,6 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path) -> pd.Dat
     d_regrid['o2_50_150m'].values = d_vals
     print(f"Deep BGC oxygen ready in {time.time()-t_step:.1f}s.")
 
-    # Sea level anomaly
     t_step = time.time()
     print("Loading & regridding SSHA (sla)...")
     with xr.open_dataset(sla_file) as ds_s:
@@ -205,13 +190,12 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path) -> pd.Dat
     s_regrid['sla'].values = s_vals
     print(f"SSHA ready in {time.time()-t_step:.1f}s.")
 
-    # Align time coordinates to physics time
+    # Align time coordinates to physics grid.
     time_coords = p_surf['time'].values
     b_regrid['time'] = time_coords
     d_regrid['time'] = time_coords
     s_regrid['time'] = time_coords
 
-    # Merge into DataFrame
     t_step = time.time()
     print("Merging arrays into single DataFrame...")
     combined_ds = xr.merge([
@@ -232,7 +216,6 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path) -> pd.Dat
 
 
 def clean_land_and_coastal(df: pd.DataFrame) -> pd.DataFrame:
-    """Exact land-drop and is_coastal 20km KD-tree step from clean_merged_v2.py."""
     t_step = time.time()
     print("Building coastal mask and dropping land cells (clean_merged_v2.py logic)...")
     df_day1 = df[df["time"] == df["time"].iloc[0]]
@@ -261,7 +244,6 @@ def clean_land_and_coastal(df: pd.DataFrame) -> pd.DataFrame:
     lon_i = np.searchsorted(lons, coords[:, 1])
     grid[lat_i, lon_i] = coastal_1d
 
-    # Drop land rows
     ocean_mask = df["thetao"].notna().values
     df_clean = df.loc[ocean_mask].reset_index(drop=True)
 
@@ -276,7 +258,6 @@ def clean_land_and_coastal(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def resolve_day_fill_indices(lat_day: np.ndarray, lon_day: np.ndarray, nan_mask: np.ndarray, cache: dict):
-    """Return (target_idx, source_idx, dists_km) for NaN cells with neighbor <= 25 km."""
     if not nan_mask.any() or nan_mask.all():
         empty_i = np.empty(0, dtype=np.int64)
         return empty_i, empty_i, np.empty(0, dtype=np.float64)
@@ -304,7 +285,6 @@ def resolve_day_fill_indices(lat_day: np.ndarray, lon_day: np.ndarray, nan_mask:
 
 
 def fill_nearest_neighbor(df_clean: pd.DataFrame) -> pd.DataFrame:
-    """Exact nearest-neighbour fill within 25 km from build_merged_v3.py."""
     t_step = time.time()
     print("Performing nearest-neighbour 25km fill (build_merged_v3.py logic)...")
     df_out = df_clean.copy()
@@ -334,7 +314,7 @@ def fill_nearest_neighbor(df_clean: pd.DataFrame) -> pd.DataFrame:
         df_out[var] = filled_vals.astype(np.float32)
         df_out[f"{var}_filled"] = filled_flag
 
-    # Reorder columns to exact MERGED_V3 schema (minus u10, v10)
+    # Matches MERGED_V3 column order (wind omitted).
     cols = [
         'time', 'latitude', 'longitude',
         'thetao', 'so', 'uo', 'vo',
@@ -347,7 +327,6 @@ def fill_nearest_neighbor(df_clean: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_spatial_lookup(df_sample: pd.DataFrame, n_cells: int = 18650):
-    """Build land distances and per-latitude >=200km reference index lists for rules."""
     d0 = df_sample[df_sample["time"] == df_sample["time"].iloc[0]]
     ocean_coords = d0[["latitude", "longitude"]].to_numpy()
     assert len(ocean_coords) == n_cells, f"Expected {n_cells} cells, got {len(ocean_coords)}"
@@ -376,7 +355,6 @@ def build_spatial_lookup(df_sample: pd.DataFrame, n_cells: int = 18650):
 
 
 def compute_rules_v3c(df: pd.DataFrame, n_cells: int = 18650) -> pd.DataFrame:
-    """Exact logic of build_rules_v2.py + build_rules_v3c.py (lat < 19.5N cut)."""
     t_step = time.time()
     print("Computing upwelling & low_oxygen_risk rules (v2 + v3c 19.5N cutoff)...")
     ocean_coords, lat_to_idx, band_ref_indices = build_spatial_lookup(df, n_cells)
@@ -409,7 +387,7 @@ def compute_rules_v3c(df: pd.DataFrame, n_cells: int = 18650) -> pd.DataFrame:
     o2deep = df["o2_50_150m"].to_numpy()
     low_oxygen_risk = upwelling & (~np.isnan(o2deep)) & (~np.isnan(ref_o2deep)) & ((o2deep - ref_o2deep) <= -50.0)
 
-    # 19.5N northern cutoff
+    # 19.5N northern cutoff masks winter false alarms.
     excl_1d = ocean_lats >= LAT_CUTOFF
     excl_col = np.tile(excl_1d.astype(np.int8), n_days)
     keep_mask = excl_col == 0
@@ -432,7 +410,6 @@ def compute_rules_v3c(df: pd.DataFrame, n_cells: int = 18650) -> pd.DataFrame:
 
 
 def compare_with_existing_v3(df_new: pd.DataFrame, df_old: pd.DataFrame) -> dict:
-    """Compare new vs existing MERGED_V3 over valid cells."""
     variables = ["thetao", "so", "uo", "vo", "chl", "sla", "o2", "no3", "po4", "o2_50_150m"]
     comp_results = {}
 
@@ -450,10 +427,8 @@ def compare_with_existing_v3(df_new: pd.DataFrame, df_old: pd.DataFrame) -> dict
         mean_abs_diff = float(np.mean(diff))
         max_abs_diff = float(np.max(diff))
 
-        # Correlation
         corr = float(np.corrcoef(v_new[valid], v_old[valid])[0, 1])
 
-        # Relative mean difference (%)
         mean_old = float(np.mean(v_old[valid]))
         mean_new = float(np.mean(v_new[valid]))
         rel_diff_pct = float(abs(mean_new - mean_old) / abs(mean_old) * 100.0) if mean_old != 0 else 0.0
@@ -472,22 +447,21 @@ def compare_with_existing_v3(df_new: pd.DataFrame, df_old: pd.DataFrame) -> dict
 
 
 def evaluate_pass_fail(comp_results: dict, sw_new_celldays: int, sw_old_celldays: int) -> dict:
-    """Evaluate PASS/FAIL criteria fixed in advance."""
-    # (a) thetao mean absolute diff < 0.05 degC
+    # Criterion (a): thetao mean absolute diff < 0.05 degC.
     thetao_diff = comp_results["thetao"]["mean_abs_diff"]
     pass_a = thetao_diff < 0.05
 
-    # (b) chl, no3, o2 each within 5% relative mean diff
+    # Criterion (b): chl, no3, o2 each within 5% relative mean diff.
     chl_rel = comp_results["chl"]["rel_diff_pct"]
     no3_rel = comp_results["no3"]["rel_diff_pct"]
     o2_rel = comp_results["o2"]["rel_diff_pct"]
     pass_b = (chl_rel <= 5.0) and (no3_rel <= 5.0) and (o2_rel <= 5.0)
 
-    # (c) sla mean absolute diff < 0.02 m
+    # Criterion (c): sla mean absolute diff < 0.02 m.
     sla_diff = comp_results["sla"]["mean_abs_diff"]
     pass_c = sla_diff < 0.02
 
-    # (d) SW-box Jun-Sep upwelling cell-days within 5% of existing
+    # Criterion (d): SW-box Jun-Sep upwelling cell-days within 5% of existing.
     sw_rel_pct = abs(sw_new_celldays - sw_old_celldays) / sw_old_celldays * 100.0
     pass_d = sw_rel_pct <= 5.0
 
@@ -531,20 +505,17 @@ def main():
     print(f" ORCA LONG-RECORD PILOT PIPELINE - YEAR: {year} ")
     print("=================================================================")
 
-    # Confirm Google Drive path
     if not out_dir.parent.exists():
         sys.exit(f"ERROR: Google Drive parent directory does not exist: {out_dir.parent}")
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Destination folder confirmed: {out_dir}")
 
-    # Check if final file already exists
     final_parquet = out_dir / f"ocean_long_{year}.parquet"
     rules_parquet = out_dir / f"rules_v3c_{year}.parquet"
     if final_parquet.exists():
         print(f"Output file {final_parquet} already exists. Skipping processing for {year}.")
         return
 
-    # Check credentials
     logged_in, msg = check_copernicus_credentials()
     if not logged_in and not args.skip_download:
         print(f"\n[CREDENTIAL CHECK FAILED]: {msg}")
@@ -554,7 +525,6 @@ def main():
     t_total_start = time.time()
     timings = {}
 
-    # Step 1: Download
     phys_file = raw_dir / f"physics_long_{year}.nc"
     bgc_file = raw_dir / f"bgc_long_{year}.nc"
     sla_file = raw_dir / f"sla_long_{year}.nc"
@@ -574,22 +544,18 @@ def main():
     total_raw_bytes = sum(s["size_bytes"] for s in dl_stats.values())
     print(f"\nTotal raw NetCDF download size: {total_raw_bytes / 1e6:.2f} MB ({total_raw_bytes / 1e9:.3f} GB)")
 
-    # Step 2: Merge & Regrid
     t_step = time.time()
     df_merged = process_and_merge(phys_file, bgc_file, sla_file)
     timings["merge_regrid"] = time.time() - t_step
 
-    # Step 3: Land-drop & Coastal flag
     t_step = time.time()
     df_clean = clean_land_and_coastal(df_merged)
     timings["clean_coastal"] = time.time() - t_step
 
-    # Step 4: Nearest-neighbour fill
     t_step = time.time()
     df_final = fill_nearest_neighbor(df_clean)
     timings["nn_fill"] = time.time() - t_step
 
-    # Step 5: Atomic write of final parquet
     t_step = time.time()
     tmp_final = out_dir / f".ocean_long_{year}.parquet.tmp"
     print(f"Writing to temporary file {tmp_final}...")
@@ -601,7 +567,6 @@ def main():
     print(f"Final parquet saved: {final_parquet} ({final_sz / 1e6:.2f} MB)")
     timings["save_parquet"] = time.time() - t_step
 
-    # Step 6: Delete raw files
     print("Deleting raw NetCDF files...")
     for s in dl_stats.values():
         f = s["file"]
@@ -609,7 +574,6 @@ def main():
             f.unlink()
             print(f"Deleted {f.name}")
 
-    # Step 7: Apply RULES_V2 and RULES_V3C logic
     t_step = time.time()
     df_rules = compute_rules_v3c(df_final)
     tmp_rules = out_dir / f".rules_v3c_{year}.parquet.tmp"
@@ -620,7 +584,6 @@ def main():
     timings["rules_v3c"] = time.time() - t_step
     print(f"Rules parquet saved: {rules_parquet} ({rules_parquet.stat().st_size / 1e6:.2f} MB)")
 
-    # Step 8: Upwelling cell-days in SW box (8-15N, 72-77.5E) Jun-Sep
     df_rules["month"] = pd.DatetimeIndex(df_rules["time"]).month
     sw_mask = (
         (df_rules["latitude"] >= 8.0) & (df_rules["latitude"] <= 15.0)
@@ -630,7 +593,6 @@ def main():
     sw_new_upw = int(df_rules.loc[sw_mask, "upwelling"].sum())
     print(f"New 2022 SW Jun-Sep upwelling cell-days: {sw_new_upw:,}")
 
-    # Step 9: Compare with existing MERGED_V3 and RULES_V3C if available
     existing_v3_file = EXISTING_V3_DIR / f"ocean_v3_{year}.parquet"
     existing_rules_file = EXISTING_RULES_DIR / f"rules_v3c_{year}.parquet"
 
@@ -650,7 +612,6 @@ def main():
         )
         sw_old_upw = int(df_old_rules.loc[sw_mask_old, "upwelling"].sum())
 
-        # Comparison Table
         print("\n--- Variable Comparison Over Valid Cells ---")
         rows = []
         for var, d in comp_results.items():
@@ -664,7 +625,6 @@ def main():
             })
         print(pd.DataFrame(rows).to_string(index=False))
 
-        # PASS / FAIL
         pass_fail = evaluate_pass_fail(comp_results, sw_new_upw, sw_old_upw)
         print("\n--- PASS / FAIL Verification ---")
         pf_rows = []
@@ -682,7 +642,6 @@ def main():
         print(pd.DataFrame(pf_rows).to_string(index=False))
         print(f"\nOVERALL RESULT: {'ALL PASS' if all_passed else 'FAIL'}")
 
-    # Step 10: Size Estimates for 1993-2021 (29 years)
     print("\n=================================================================")
     print(" SIZE & TIME ESTIMATES FOR 1993-2021 (29 YEARS) ")
     print("=================================================================")

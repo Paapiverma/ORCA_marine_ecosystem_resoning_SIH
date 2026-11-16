@@ -1,7 +1,4 @@
-"""
-load_sample.py
-Demonstration script loading the July 2022 sample dataset and printing upwelling and hypoxia stats.
-"""
+"""Load July 2022 sample dataset and inspect summary stats. Run: python load_sample.py"""
 
 from pathlib import Path
 import pandas as pd

@@ -1,3 +1,5 @@
+"""Apply upwelling and low-oxygen risk rules (v2) across 2022-2025. Run: python build_rules_v2.py"""
+
 from pathlib import Path
 import time
 
@@ -26,7 +28,6 @@ REGIONS = (
 
 
 def to_xyz_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
-    """Convert lat/lon degrees to 3D Cartesian coordinates (km) on sphere."""
     lat_r = np.radians(lat.astype(np.float64))
     lon_r = np.radians(lon.astype(np.float64))
     cos_lat = np.cos(lat_r)
@@ -42,7 +43,6 @@ def box_mask(lats: np.ndarray, lons: np.ndarray, lat0: float, lat1: float, lon0:
 
 
 def build_spatial_lookup(sample_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
-    """Build land distances and per-latitude >=200km reference index lists."""
     df0 = pd.read_parquet(sample_path, columns=["time", "latitude", "longitude"])
     d0 = df0[df0["time"] == df0["time"].iloc[0]]
     ocean_coords = d0[["latitude", "longitude"]].to_numpy()
@@ -77,7 +77,6 @@ def compute_year_flags(
     lat_to_idx: np.ndarray,
     band_ref_indices: list[np.ndarray],
 ) -> pd.DataFrame:
-    """Compute spatial offshore medians and upwelling / low_oxygen_risk flags for one year."""
     n_days = len(df) // N_CELLS
     assert len(df) == n_days * N_CELLS
     coords = df[["latitude", "longitude"]].to_numpy().reshape(n_days, N_CELLS, 2)
@@ -221,7 +220,6 @@ def main() -> None:
 
         print(f"Saved {out_path.name}: {n_rows:,} rows, {out_path.stat().st_size / (1024 * 1024):.2f} MB")
 
-    # 1. Yearly, Monthly, Regional reports
     tot_rows = sum(s["Rows"] for s in year_stats)
     overall_row = {
         "Period": "Overall (2022-2025)",
@@ -265,7 +263,6 @@ def main() -> None:
         })
     print(pd.DataFrame(t1c).to_string(index=False))
 
-    # 2. SW coast Jun-Sep
     print("\n=== 2. SW COAST BOX JUN-SEP PER YEAR ===")
     df_sw = pd.DataFrame(sw_junsep_stats)
     df_sw["junsep_share_of_year_upw_%"] = np.where(
@@ -279,20 +276,17 @@ def main() -> None:
     sw_js_share = sw_js_all / sw_tot_all * 100.0 if sw_tot_all > 0 else 0.0
     print(f"SW total Jun-Sep upwelling / ALL SW upwelling (4 yrs): {sw_js_all:,} / {sw_tot_all:,} = {sw_js_share:.2f}%")
 
-    # 3. Top 10 days by upwelling-flagged cells
     print("\n=== 3. TOP 10 DAYS BY FLAGGED CELLS ===")
     top10 = pd.DataFrame(daily_frames).sort_values("flagged_cells", ascending=False).head(10).copy()
     top10["date"] = pd.to_datetime(top10["date"]).dt.strftime("%Y-%m-%d")
     print(top10.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
-    # 4. 2022-08-04 Kerala box vs Open-ocean box
     print("\n=== 4. 2022-08-04 KERALA BOX VS OPEN-OCEAN BOX ===")
     k_mask = box_mask(aug4_df["latitude"].to_numpy(), aug4_df["longitude"].to_numpy(), 8.5, 13.0, 74.0, 77.0)
     o_mask = box_mask(aug4_df["latitude"].to_numpy(), aug4_df["longitude"].to_numpy(), 8.5, 13.0, 66.0, 70.0)
     for lbl, sub in [("Kerala Box (8.5-13N, 74-77E)", aug4_df[k_mask]), ("Open-Ocean Box (8.5-13N, 66-70E)", aug4_df[o_mask])]:
         print(f"{lbl}: cells={len(sub):,} | upwelling={int(sub['upwelling'].sum()):,} | low_oxygen_risk={int(sub['low_oxygen_risk'].sum()):,}")
 
-    # 5. PASS/FAIL checks
     print("\n=== 5. PASS / FAIL EVALUATION ===")
     sw_2022 = int(df_sw.loc[df_sw["year"] == 2022, "upwelling_junsep"].iloc[0])
     sw_2024 = int(df_sw.loc[df_sw["year"] == 2024, "upwelling_junsep"].iloc[0])
