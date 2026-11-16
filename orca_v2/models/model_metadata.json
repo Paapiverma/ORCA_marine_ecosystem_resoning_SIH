@@ -1,0 +1,44 @@
+{
+  "features": [
+    "thetao_minus_ref",
+    "no3",
+    "chl",
+    "sla",
+    "o2_50_150m",
+    "uo",
+    "vo",
+    "d3_thetao",
+    "d3_no3",
+    "d3_chl",
+    "upw_d1",
+    "upw_d2",
+    "upw_d3",
+    "days_since_flagged",
+    "w5_upw_frac",
+    "d3_w5_upw_frac",
+    "w5_thetao_minus_ref",
+    "latitude",
+    "longitude",
+    "is_coastal",
+    "sin_doy",
+    "cos_doy"
+  ],
+  "models": {
+    "h3": {
+      "horizon_days": 3,
+      "model_file": "model_onset_h3.joblib",
+      "val_cutoff": 0.7813220620155334,
+      "val_f1": 0.470127138896855,
+      "ap_2020_2025_junsep": 0.32830134251503595,
+      "file_size_bytes": 337609
+    },
+    "h5": {
+      "horizon_days": 5,
+      "model_file": "model_onset_h5.joblib",
+      "val_cutoff": 0.7482414841651917,
+      "val_f1": 0.4909277644642246,
+      "ap_2020_2025_junsep": 0.3682504583786778,
+      "file_size_bytes": 339721
+    }
+  }
+}
