@@ -67,6 +67,7 @@ try:
 except ImportError:
     from orca_v2.config import RULES_V2_DIR as IN_DIR, RULES_V3C_DIR as OUT_DIR, FIGURES_DIR as FIG_DIR
 
+# Skip lat >= 19.5N: the Gulf of Khambhat gave winter false alarms (cause not tested, see README).
 LAT_CUTOFF = 19.5
 MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 OUT_COLS = [
