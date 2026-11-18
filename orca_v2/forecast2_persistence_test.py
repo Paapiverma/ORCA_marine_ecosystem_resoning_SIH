@@ -1,3 +1,5 @@
+"""Evaluate persistence baseline against gradient boosted trees for upwelling flag forecasting (h=1,3,5). Run: python forecast2_persistence_test.py"""
+
 import gc
 from pathlib import Path
 import sys
@@ -47,7 +49,6 @@ FEATURE_NAMES = [
 
 
 def log_progress(msg: str) -> None:
-    """Print progress line with timestamp and append to FORECAST2/run_log.txt."""
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     print(line, flush=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -55,7 +56,6 @@ def log_progress(msg: str) -> None:
 
 
 def compute_prf1(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[int, int, int, int, float, float, float]:
-    """Return positive_cell_days, tp, fp, fn, precision, recall, f1 without accuracy."""
     pos = int(y_true.sum())
     tp = int(np.sum((y_true == 1) & (y_pred == 1)))
     fp = int(np.sum((y_true == 0) & (y_pred == 1)))
@@ -67,7 +67,6 @@ def compute_prf1(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[int, int, int,
 
 
 def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
-    """Map dates to 0-based no-leap day index (0..364) and leap-day mask (Feb 29)."""
     is_feb29 = np.asarray((dates.month == 2) & (dates.day == 29), dtype=bool)
     raw_doy = dates.dayofyear.to_numpy(dtype=np.int64)
     shift = (dates.is_leap_year & (raw_doy > 60)).astype(np.int64)
@@ -76,11 +75,10 @@ def map_timestamps_to_doy365(dates: pd.DatetimeIndex) -> tuple[np.ndarray, np.nd
 
 
 def load_data() -> dict:
-    """Load continuous 2010-2025 feature and target arrays for cells with latitude < 19.5."""
     log_progress("START: loading data (2010-2025 continuous)")
     t0 = time.time()
 
-    # Anchor grid on 2022 rules
+    # Anchor grid on 2022 rules.
     d0 = pd.read_parquet(
         LONG_DIR / "rules_v3c_2022.parquet",
         columns=["time", "latitude", "longitude", "is_coastal", "excluded_north"],
@@ -160,7 +158,6 @@ def load_data() -> dict:
 
 
 def build_features(data: dict, d_indices: np.ndarray, log_tag: str = "") -> np.ndarray:
-    """Assemble (len(d_indices) * n_sub, 19) float32 feature matrix strictly from days <= D."""
     assert np.all(d_indices >= 3), "D-3 lag requires day index >= 3"
     if log_tag:
         log_progress(f"START: building features ({log_tag}, days={len(d_indices)})")
@@ -173,23 +170,19 @@ def build_features(data: dict, d_indices: np.ndarray, log_tag: str = "") -> np.n
     upw = data["upw"]
 
     col_i = 0
-    # Core continuous features: thetao_minus_ref, no3, chl, sla, o2_50_150m, uo, vo
     for col in ("thetao_minus_ref", "no3", "chl", "sla", "o2_50_150m", "uo", "vo"):
         X[:, col_i] = arrays[col][d_indices].reshape(-1)
         col_i += 1
 
-    # Upwelling lags: D, D-1, D-2, D-3
     for lag in (0, 1, 2, 3):
         X[:, col_i] = upw[d_indices - lag].astype(np.float32).reshape(-1)
         col_i += 1
 
-    # 3-day changes: thetao, no3, chl from D-3 to D
     for col in ("thetao", "no3", "chl"):
         diff = arrays[col][d_indices] - arrays[col][d_indices - 3]
         X[:, col_i] = diff.reshape(-1)
         col_i += 1
 
-    # Static spatial and calendar features
     X[:, col_i] = np.broadcast_to(data["lat"][None, :], (n_d, n_sub)).reshape(-1)
     col_i += 1
     X[:, col_i] = np.broadcast_to(data["lon"][None, :], (n_d, n_sub)).reshape(-1)
@@ -208,7 +201,6 @@ def build_features(data: dict, d_indices: np.ndarray, log_tag: str = "") -> np.n
 
 
 def select_best_f1_cutoff(y_true: np.ndarray, probs: np.ndarray) -> tuple[float, float]:
-    """Return probability cutoff maximizing F1 on validation probabilities."""
     prec, rec, thresh = precision_recall_curve(y_true, probs)
     p, r = prec[:-1], rec[:-1]
     denom = p + r
@@ -220,7 +212,6 @@ def select_best_f1_cutoff(y_true: np.ndarray, probs: np.ndarray) -> tuple[float,
 
 
 def predict_chunked(clf: HistGradientBoostingClassifier, data: dict, d_indices: np.ndarray, chunk_days: int = 100) -> np.ndarray:
-    """Predict class-1 probabilities over d_indices in day chunks to cap peak memory."""
     n_sub = data["n_sub"]
     probs = np.empty(len(d_indices) * n_sub, dtype=np.float32)
     offset = 0
@@ -235,10 +226,9 @@ def predict_chunked(clf: HistGradientBoostingClassifier, data: dict, d_indices: 
 
 
 def eval_transition_metrics(y_true: np.ndarray, y_pred: np.ndarray, flag_d: np.ndarray) -> dict[str, float]:
-    """Compute overall P/R/F1, onset P/R (0->1), and offset R (1->0)."""
     pos, tp, fp, fn, prec, rec, f1 = compute_prf1(y_true, y_pred)
 
-    # Onset: conditioned on flag[D] == 0
+    # Onset: conditioned on flag[D] == 0.
     zero_d = flag_d == 0
     true_onset = zero_d & (y_true == 1)
     pred_onset = zero_d & (y_pred == 1)
@@ -248,7 +238,7 @@ def eval_transition_metrics(y_true: np.ndarray, y_pred: np.ndarray, flag_d: np.n
     onset_rec = onset_tp / onset_n if onset_n > 0 else 0.0
     onset_prec = onset_tp / onset_pred_n if onset_pred_n > 0 else 0.0
 
-    # Offset: conditioned on flag[D] == 1
+    # Offset: conditioned on flag[D] == 1.
     one_d = flag_d == 1
     true_offset = one_d & (y_true == 0)
     pred_offset = one_d & (y_pred == 0)
@@ -280,7 +270,6 @@ def main() -> None:
     upw = data["upw"]
     n_sub = data["n_sub"]
 
-    # Boundary indices
     idx_2017_start = int(np.where(dates.year == 2017)[0][0])
     idx_2017_end = int(np.where(dates.year == 2017)[0][-1])
     target_1819_idx = np.where(np.isin(dates.year, [2018, 2019]))[0]
@@ -313,9 +302,6 @@ def main() -> None:
         y_test = upw[target_test_idx]
         flag_d_test = upw[d_test]
 
-        # -------------------------------------------------------------
-        # 1. Main Model: Train 2010-2017 (every 4th day, fallback 8th)
-        # -------------------------------------------------------------
         train_stride_main = 4
         d_train_main = np.arange(3, idx_2017_end + 1 - h, train_stride_main)
         try:
@@ -340,14 +326,12 @@ def main() -> None:
         del X_train_main, y_train_main
         gc.collect()
 
-        # Main Model: Cutoff tuning on 2018-2019
         log_progress(f"START: evaluating Main h={h} validation (2018-2019) and tuning F1 cutoff")
         p_val_main = predict_chunked(clf_main, data, d_val, chunk_days=100)
         cutoff_main, val_f1_main = select_best_f1_cutoff(y_val, p_val_main)
         del p_val_main
         log_progress(f"END: evaluating Main h={h} validation complete (cutoff={cutoff_main:.4f}, val_F1={val_f1_main:.4f})")
 
-        # Main Model: Permutation importance on 50k random rows from 2018-2019
         log_progress(f"START: evaluating Main h={h} permutation importance (50k rows, 2018-2019)")
         rng = np.random.default_rng(42)
         sample_d_idx = rng.choice(d_val, size=min(len(d_val), 15), replace=False)
@@ -379,9 +363,6 @@ def main() -> None:
         gc.collect()
         log_progress(f"END: evaluating Main h={h} permutation importance complete")
 
-        # -------------------------------------------------------------
-        # 2. Control Model: Train 2017 alone (every 2nd day)
-        # -------------------------------------------------------------
         train_stride_ctrl = 2
         d_train_ctrl = np.arange(idx_2017_start, idx_2017_end + 1 - h, train_stride_ctrl)
         X_train_ctrl = build_features(data, d_train_ctrl, log_tag=f"Control train h={h} (stride={train_stride_ctrl})")
@@ -394,14 +375,12 @@ def main() -> None:
         del X_train_ctrl, y_train_ctrl
         gc.collect()
 
-        # Control Model: Cutoff tuning on 2018-2019
         log_progress(f"START: evaluating Control h={h} validation (2018-2019) and tuning F1 cutoff")
         p_val_ctrl = predict_chunked(clf_ctrl, data, d_val, chunk_days=100)
         cutoff_ctrl, val_f1_ctrl = select_best_f1_cutoff(y_val, p_val_ctrl)
         del p_val_ctrl
         log_progress(f"END: evaluating Control h={h} validation complete (cutoff={cutoff_ctrl:.4f}, val_F1={val_f1_ctrl:.4f})")
 
-        # Control Model: Permutation importance on 50k random rows from 2018-2019
         log_progress(f"START: evaluating Control h={h} permutation importance (50k rows, 2018-2019)")
         sample_d_idx_ctrl = rng.choice(d_val, size=min(len(d_val), 15), replace=False)
         X_val_sample_ctrl = build_features(data, sample_d_idx_ctrl)
@@ -432,9 +411,6 @@ def main() -> None:
         gc.collect()
         log_progress(f"END: evaluating Control h={h} permutation importance complete")
 
-        # -------------------------------------------------------------
-        # 3. Test Evaluation on 2020-2025
-        # -------------------------------------------------------------
         log_progress(f"START: predicting test set (2020-2025) for h={h}")
         probs_main = predict_chunked(clf_main, data, d_test, chunk_days=100).reshape(len(target_test_idx), n_sub)
         preds_main = (probs_main >= cutoff_main).astype(np.int8)
@@ -445,7 +421,6 @@ def main() -> None:
         del probs_ctrl
         log_progress(f"END: predicting test set for h={h} complete")
 
-        # Subsets: Jun-Sep and All days across the 3 periods
         for period_name, p_mask in PERIOD_DEFS:
             for subset_name in ("Jun-Sep", "All days"):
                 if subset_name == "Jun-Sep":
@@ -463,7 +438,6 @@ def main() -> None:
                 m_res_ctrl = eval_transition_metrics(yt, yp_ctrl, yp_pers)
                 m_res_pers = eval_transition_metrics(yt, yp_pers, yp_pers)
 
-                # Persistence baseline entry
                 pers_key = (h, period_name, subset_name)
                 if pers_key not in pers_recorded:
                     pers_recorded.add(pers_key)
@@ -481,7 +455,6 @@ def main() -> None:
                         }
                     )
 
-                # Main model entry
                 metric_rows.append(
                     {
                         "model": "Main (2010-2017)",
@@ -496,7 +469,6 @@ def main() -> None:
                     }
                 )
 
-                # Control model entry
                 metric_rows.append(
                     {
                         "model": "Control (2017)",

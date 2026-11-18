@@ -1,3 +1,5 @@
+"""Apply latitude < 19.5N cutoff to rules_v2 parquets. Run: python build_rules_v3c.py"""
+
 from pathlib import Path
 import time
 
@@ -65,6 +67,7 @@ try:
 except ImportError:
     from orca_v2.config import RULES_V2_DIR as IN_DIR, RULES_V3C_DIR as OUT_DIR, FIGURES_DIR as FIG_DIR
 
+# Skip lat >= 19.5N: the Gulf of Khambhat gave winter false alarms (cause not tested, see README).
 LAT_CUTOFF = 19.5
 MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 OUT_COLS = [
@@ -78,7 +81,6 @@ def plot_junsep_2x2_v3c(
     extent: list[float],
     out_path: Path,
 ) -> Path:
-    """Plot 2x2 Jun-Sep upwelling frequency maps for RULES_V3C with shared 0-1 scale."""
     cmap = make_freq_cmap()
     fig, axes = plt.subplots(2, 2, figsize=(11.2, 10.2), constrained_layout=True, sharex=True, sharey=True)
     last_im = None
@@ -104,7 +106,6 @@ def plot_junsep_2x2_v3c(
 
 
 def main() -> None:
-    """Build RULES_V3C parquets excluding latitude >= 19.5, verify invariants, report metrics, and plot maps."""
     t0 = time.time()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -212,7 +213,6 @@ def main() -> None:
         f"({excl_1d.mean() * 100:.2f}%)"
     )
 
-    # 2a. Dec-Feb upwelling cell-days & top 10 still-flagged cells
     print("\n=== 2A. DEC-FEB UPWELLING CELL-DAYS & TOP 10 STILL-FLAGGED CELLS ===")
     djf_domain = djf_days_total * N_CELLS
     djf_drop_pct = (djf_orig - djf_new) / djf_orig * 100.0
@@ -236,13 +236,11 @@ def main() -> None:
     top_new = cells_df[cells_df["djf_days_new"] > 0].sort_values("djf_days_new", ascending=False).head(10)
     print(top_new[["lat", "lon", "is_coastal", "djf_days_new"]].to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
-    # 2b. SW box Jun-Sep per year
     print("\n=== 2B. SW BOX (8-15N, 72-77.5E) JUN-SEP UPWELLING CELL-DAYS ===")
     sw_rows = [{"Year": str(y), "Original": sw_js_orig[y], "RULES_V3C": sw_js_new[y]} for y in YEARS]
     sw_rows.append({"Year": "Total", "Original": sum(sw_js_orig.values()), "RULES_V3C": sum(sw_js_new.values())})
     print(pd.DataFrame(sw_rows).to_string(index=False))
 
-    # 2c & 2d. Monthly breakdown (Jan-Dec)
     print("\n=== 2C & 2D. MONTHLY FLAGGED CELL-DAYS (ORIGINAL VS REMOVED VS RULES_V3C) ===")
     m_rows = []
     for m in range(1, 13):
@@ -286,7 +284,6 @@ def main() -> None:
     )
     print(f"Jun-Sep domain low_oxygen_risk flags: orig={js_lo_orig_tot:,}, removed={js_lo_rem_tot:,}")
 
-    # 3. PASS / FAIL
     print("\n=== 3. PASS / FAIL EVALUATION ===")
     pass_a = djf_drop_pct >= 90.0
     pass_b = sw_js_orig == sw_js_new
@@ -295,7 +292,6 @@ def main() -> None:
     print(f"(b) SW box Jun-Sep unchanged               : {'PASS' if pass_b else 'FAIL'}")
     print(f"(c) Removed Jun-Sep flags < 2% of domain   : {'PASS' if pass_c else 'FAIL'} ({js_upw_rem_share:.4f}%)")
 
-    # 4. Figures (same style as RULES_V2)
     djf_grid = to_grid(djf_per_cell_new / djf_days_total, n_lat, n_lon, lat_idx, lon_idx)
     oct_grid = to_grid(oct_sum_new / oct_days_total, n_lat, n_lon, lat_idx, lon_idx)
     saved = [

@@ -1,19 +1,4 @@
-"""
-Long-record Copernicus download and pipeline runner: 2021 down to earliest_year.
-
-Usage:
-    python scripts/run_long_years.py [earliest_year] [options]
-    e.g.
-    python scripts/run_long_years.py 2005
-    python scripts/run_long_years.py 1993 --start-year 2021
-
-Products:
-  - Physics: cmems_mod_glo_phy_my_0.083deg_P1D-m (thetao, uo, vo, depth 0-50m) [NO so]
-  - Biogeochemistry: cmems_mod_glo_bgc_my_0.25deg_P1D-m (chl, no3, o2, depth 0-200m) [NO po4]
-  - Sea level: cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D (sla)
-
-Region: 8.0 to 22.0 N, 65.0 to 78.0 E
-"""
+"""Download raw Copernicus data, process ocean parquets, and compute rules_v3c for long records. Run: python run_long_years.py"""
 
 import argparse
 import datetime
@@ -30,7 +15,6 @@ import pandas as pd
 from scipy.spatial import cKDTree
 import xarray as xr
 
-# Spatial Constants
 EARTH_RADIUS_KM = 6371.0
 COAST_KM = 20.0
 MAX_FILL_KM = 25.0
@@ -39,7 +23,7 @@ LAT_HALF_BAND = 0.5 + 1e-4
 LAT_CUTOFF = 19.5
 N_CELLS = 18650
 
-# Variables without 'so' and 'po4'
+# Omits so and po4 which were dropped in v2.
 FILL_VARS = ("chl", "o2", "no3")
 OUT_FLOAT_COLS = ['latitude', 'longitude', 'thetao', 'uo', 'vo', 'chl', 'sla', 'o2', 'no3', 'o2_50_150m']
 OUT_COLS = [
@@ -64,28 +48,23 @@ except ImportError:
 
 
 def setup_logger(log_file: Path, drive_log_file: Path | None = None):
-    """Setup multi-destination logging to console, local logs folder, and Google Drive run_log.txt."""
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("run_long_years")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
 
-    # Formatter
     formatter = logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
-    # 1. Console Handler
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
-    # 2. Local File Handler
     fh = logging.FileHandler(str(log_file), mode="a", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    # 3. Google Drive File Handler (run_log.txt)
     if drive_log_file is not None:
         try:
             drive_log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -100,7 +79,6 @@ def setup_logger(log_file: Path, drive_log_file: Path | None = None):
 
 
 def check_copernicus_credentials():
-    """Verify copernicusmarine credentials without exposing secrets."""
     import subprocess
     cmd = ["copernicusmarine", "login", "--check-credentials-valid"]
     try:
@@ -113,7 +91,6 @@ def check_copernicus_credentials():
 
 
 def latlon_to_xyz_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
-    """Convert lat/lon degrees to 3D Cartesian coordinates (km) on sphere."""
     lat_r = np.radians(lat.astype(np.float64))
     lon_r = np.radians(lon.astype(np.float64))
     cos_lat = np.cos(lat_r)
@@ -125,7 +102,6 @@ def latlon_to_xyz_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
 
 
 def download_with_retry(name: str, download_func, max_retries: int, wait_seconds: float, logger: logging.Logger):
-    """Execute a download function with retry logic and wait intervals."""
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"[{name}] Starting download (attempt {attempt}/{max_retries})...")
@@ -147,7 +123,6 @@ def download_with_retry(name: str, download_func, max_retries: int, wait_seconds
 
 
 def download_year_raw(year: int, raw_dir: Path, max_retries: int, wait_seconds: float, logger: logging.Logger) -> dict:
-    """Download physics (no so), bgc (no po4), and sla for the specified year."""
     import copernicusmarine
 
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -160,7 +135,6 @@ def download_year_raw(year: int, raw_dir: Path, max_retries: int, wait_seconds: 
 
     download_results = {}
 
-    # 1. Physics: thetao, uo, vo (NO so)
     def _dl_phys():
         return copernicusmarine.subset(
             dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
@@ -181,7 +155,6 @@ def download_year_raw(year: int, raw_dir: Path, max_retries: int, wait_seconds: 
     f_p, sz_p, t_p = download_with_retry("Physics", _dl_phys, max_retries, wait_seconds, logger)
     download_results["physics"] = {"file": f_p, "size_mb": sz_p, "time_s": t_p}
 
-    # 2. BGC: chl, no3, o2 (NO po4)
     def _dl_bgc():
         return copernicusmarine.subset(
             dataset_id="cmems_mod_glo_bgc_my_0.25deg_P1D-m",
@@ -202,7 +175,6 @@ def download_year_raw(year: int, raw_dir: Path, max_retries: int, wait_seconds: 
     f_b, sz_b, t_b = download_with_retry("BGC", _dl_bgc, max_retries, wait_seconds, logger)
     download_results["bgc"] = {"file": f_b, "size_mb": sz_b, "time_s": t_b}
 
-    # 3. Sea Level Anomaly: sla
     def _dl_sla():
         return copernicusmarine.subset(
             dataset_id="cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D",
@@ -225,7 +197,6 @@ def download_year_raw(year: int, raw_dir: Path, max_retries: int, wait_seconds: 
 
 
 def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path, logger: logging.Logger) -> pd.DataFrame:
-    """Exact logic of build_merged_v2.py (0-50m averaging, linear regridding, 50-150m deep O2 mean)."""
     t0 = time.time()
     logger.info("Loading physics & computing 0-50m mean...")
     with xr.open_dataset(phys_file) as ds_p:
@@ -235,7 +206,6 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path, logger: l
     land_mask = np.isnan(p_surf['thetao'].values)
     logger.info(f"Physics processed in {time.time()-t0:.1f}s. Grid: {len(target_lat)} lats x {len(target_lon)} lons.")
 
-    # Surface BGC (0-50m mean of chl, no3, o2)
     t_step = time.time()
     logger.info("Loading & regridding surface BGC (chl, no3, o2 0-50m)...")
     with xr.open_dataset(bgc_file) as ds_b:
@@ -247,7 +217,6 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path, logger: l
         b_regrid[v].values = arr
     logger.info(f"Surface BGC ready in {time.time()-t_step:.1f}s.")
 
-    # Deep BGC Oxygen (50-150m mean)
     t_step = time.time()
     logger.info("Loading & regridding deep BGC oxygen (50-150m)...")
     with xr.open_dataset(bgc_file) as ds_b:
@@ -259,7 +228,6 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path, logger: l
     d_regrid['o2_50_150m'].values = d_vals
     logger.info(f"Deep BGC oxygen ready in {time.time()-t_step:.1f}s.")
 
-    # Sea level anomaly
     t_step = time.time()
     logger.info("Loading & regridding SSHA (sla)...")
     with xr.open_dataset(sla_file) as ds_s:
@@ -269,13 +237,12 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path, logger: l
     s_regrid['sla'].values = s_vals
     logger.info(f"SSHA ready in {time.time()-t_step:.1f}s.")
 
-    # Align time coordinates to avoid any precision mismatch
+    # Align time coordinates to avoid float precision mismatch.
     time_coords = p_surf['time'].values
     b_regrid['time'] = time_coords
     d_regrid['time'] = time_coords
     s_regrid['time'] = time_coords
 
-    # Merge arrays
     t_step = time.time()
     logger.info("Merging arrays into single DataFrame...")
     combined_ds = xr.merge([p_surf, b_regrid, d_regrid, s_regrid])
@@ -289,7 +256,6 @@ def process_and_merge(phys_file: Path, bgc_file: Path, sla_file: Path, logger: l
 
 
 def clean_land_and_coastal(df: pd.DataFrame, logger: logging.Logger) -> pd.DataFrame:
-    """Exact land-drop and is_coastal 20km KD-tree step from clean_merged_v2.py."""
     t_step = time.time()
     logger.info("Building coastal mask and dropping land cells (clean_merged_v2.py logic)...")
     df_day1 = df[df["time"] == df["time"].iloc[0]]
@@ -318,7 +284,6 @@ def clean_land_and_coastal(df: pd.DataFrame, logger: logging.Logger) -> pd.DataF
     lon_i = np.searchsorted(lons, coords[:, 1])
     grid[lat_i, lon_i] = coastal_1d
 
-    # Drop land rows
     ocean_mask = df["thetao"].notna().values
     df_clean = df.loc[ocean_mask].reset_index(drop=True)
 
@@ -333,7 +298,6 @@ def clean_land_and_coastal(df: pd.DataFrame, logger: logging.Logger) -> pd.DataF
 
 
 def resolve_day_fill_indices(lat_day: np.ndarray, lon_day: np.ndarray, nan_mask: np.ndarray, cache: dict):
-    """Return (target_idx, source_idx, dists_km) for NaN cells with neighbor <= 25 km."""
     if not nan_mask.any() or nan_mask.all():
         empty_i = np.empty(0, dtype=np.int64)
         return empty_i, empty_i, np.empty(0, dtype=np.float64)
@@ -361,7 +325,6 @@ def resolve_day_fill_indices(lat_day: np.ndarray, lon_day: np.ndarray, nan_mask:
 
 
 def fill_nearest_neighbor(df_clean: pd.DataFrame, logger: logging.Logger) -> pd.DataFrame:
-    """Exact nearest-neighbour fill within 25 km for chl, o2, no3 from build_merged_v3.py."""
     t_step = time.time()
     logger.info("Performing nearest-neighbour 25km fill (chl, o2, no3)...")
     df_out = df_clean.copy()
@@ -391,14 +354,12 @@ def fill_nearest_neighbor(df_clean: pd.DataFrame, logger: logging.Logger) -> pd.
         df_out[var] = filled_vals.astype(np.float32)
         df_out[f"{var}_filled"] = filled_flag
 
-    # Reorder columns to exact schema (without so, po4, po4_filled)
     df_out = df_out[OUT_COLS]
     logger.info(f"Fill complete in {time.time()-t_step:.1f}s.")
     return df_out
 
 
 def build_spatial_lookup(df_sample: pd.DataFrame, n_cells: int = N_CELLS):
-    """Build land distances and per-latitude >=200km reference index lists for rules."""
     d0 = df_sample[df_sample["time"] == df_sample["time"].iloc[0]]
     ocean_coords = d0[["latitude", "longitude"]].to_numpy()
     assert len(ocean_coords) == n_cells, f"Expected {n_cells} cells, got {len(ocean_coords)}"
@@ -427,7 +388,6 @@ def build_spatial_lookup(df_sample: pd.DataFrame, n_cells: int = N_CELLS):
 
 
 def compute_rules_v3c(df: pd.DataFrame, logger: logging.Logger, n_cells: int = N_CELLS) -> pd.DataFrame:
-    """Exact logic of build_rules_v2.py + build_rules_v3c.py (lat < 19.5N cut)."""
     t_step = time.time()
     logger.info("Computing upwelling & low_oxygen_risk rules (lat < 19.5N cutoff)...")
     ocean_coords, lat_to_idx, band_ref_indices = build_spatial_lookup(df, n_cells)
@@ -460,7 +420,7 @@ def compute_rules_v3c(df: pd.DataFrame, logger: logging.Logger, n_cells: int = N
     o2deep = df["o2_50_150m"].to_numpy()
     low_oxygen_risk = upwelling & (~np.isnan(o2deep)) & (~np.isnan(ref_o2deep)) & ((o2deep - ref_o2deep) <= -50.0)
 
-    # 19.5N northern cutoff
+    # Latitude cutoff: exclude Gulf of Khambhat false alarms.
     excl_1d = ocean_lats >= LAT_CUTOFF
     excl_col = np.tile(excl_1d.astype(np.int8), n_days)
     keep_mask = excl_col == 0
@@ -485,7 +445,6 @@ def compute_rules_v3c(df: pd.DataFrame, logger: logging.Logger, n_cells: int = N
 def append_year_summary(year: int, df_ocean: pd.DataFrame, df_rules: pd.DataFrame,
                         ocean_path: Path, rules_path: Path, seconds_taken: float,
                         out_dir: Path, logger: logging.Logger) -> None:
-    """Append or update a year's metrics row in year_summary.csv on Google Drive."""
     csv_path = out_dir / "year_summary.csv"
     data_vars = [c for c in df_ocean.columns if c not in ['time', 'latitude', 'longitude', 'is_coastal'] and not c.endswith('_filled')]
     nan_pcts = {f'{c}_nan_pct': round(float(df_ocean[c].isna().mean() * 100.0), 3) for c in data_vars}
@@ -538,11 +497,9 @@ def append_year_summary(year: int, df_ocean: pd.DataFrame, df_rules: pd.DataFram
 
 
 def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait_seconds: float, logger: logging.Logger) -> str:
-    """Process a single year end-to-end: download, clean, fill, rules, atomic save, delete raw."""
     ocean_final = out_dir / f"ocean_long_{year}.parquet"
     rules_final = out_dir / f"rules_v3c_{year}.parquet"
 
-    # 1. Skip if already exists
     if ocean_final.exists() and rules_final.exists():
         logger.info(f">>> [Year {year}] Already exists ({ocean_final.name} and {rules_final.name}). Skipping.")
         return "SKIPPED"
@@ -552,7 +509,6 @@ def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait
     logger.info(f"=================================================================")
     t_year_start = time.time()
 
-    # 2. Download raw files
     dl_stats = download_year_raw(year, raw_dir, max_retries, wait_seconds, logger)
     total_raw_mb = sum(s["size_mb"] for s in dl_stats.values())
     logger.info(f"[Year {year}] Total raw download size: {total_raw_mb:.2f} MB")
@@ -561,16 +517,12 @@ def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait
     bgc_file = dl_stats["bgc"]["file"]
     sla_file = dl_stats["sla"]["file"]
 
-    # 3. Process and merge
     df_merged = process_and_merge(phys_file, bgc_file, sla_file, logger)
 
-    # 4. Clean land and assign is_coastal
     df_clean = clean_land_and_coastal(df_merged, logger)
 
-    # 5. Nearest neighbor fill
     df_final = fill_nearest_neighbor(df_clean, logger)
 
-    # 6. Atomic save of ocean parquet
     ocean_tmp = out_dir / f".ocean_long_{year}.parquet.tmp"
     logger.info(f"Writing to temporary file {ocean_tmp.name}...")
     df_final.to_parquet(ocean_tmp, compression="snappy", index=False)
@@ -580,7 +532,6 @@ def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait
     final_sz_mb = ocean_final.stat().st_size / 1e6
     logger.info(f"[Year {year}] Saved {ocean_final.name} ({final_sz_mb:.2f} MB, {len(df_final):,} rows)")
 
-    # 7. Rules V3C computation
     df_rules = compute_rules_v3c(df_final, logger)
     rules_tmp = out_dir / f".rules_v3c_{year}.parquet.tmp"
     df_rules.to_parquet(rules_tmp, compression="snappy", index=False)
@@ -590,7 +541,6 @@ def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait
     rules_sz_mb = rules_final.stat().st_size / 1e6
     logger.info(f"[Year {year}] Saved {rules_final.name} ({rules_sz_mb:.2f} MB)")
 
-    # 8. Report SW-box Jun-Sep upwelling cell-days
     df_rules["month"] = pd.DatetimeIndex(df_rules["time"]).month
     sw_mask = (
         (df_rules["latitude"] >= 8.0) & (df_rules["latitude"] <= 15.0)
@@ -600,7 +550,6 @@ def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait
     sw_upw_days = int(df_rules.loc[sw_mask, "upwelling"].sum())
     logger.info(f"[Year {year}] SW Jun-Sep Upwelling cell-days: {sw_upw_days:,}")
 
-    # 9. Delete raw files after success
     logger.info(f"[Year {year}] Deleting raw NetCDF files...")
     for s in dl_stats.values():
         f = s["file"]
@@ -609,7 +558,6 @@ def process_year(year: int, out_dir: Path, raw_dir: Path, max_retries: int, wait
             logger.info(f"  Deleted: {f.name}")
 
     total_time = time.time() - t_year_start
-    # 10. Append row to year_summary.csv on Google Drive
     append_year_summary(year, df_final, df_rules, ocean_final, rules_final, total_time, out_dir, logger)
 
     logger.info(f">>> [Year {year}] Successfully completed in {total_time:.1f}s ({total_time/60:.1f} min)")
@@ -647,13 +595,11 @@ def main():
     logger.info(f" Log File    : {log_file}")
     logger.info("=================================================================")
 
-    # Confirm Google Drive path
     if not out_dir.parent.exists():
         logger.error(f"Google Drive parent directory not found: {out_dir.parent}")
         sys.exit(1)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Verify Copernicus Marine credentials
     logged_in, msg = check_copernicus_credentials()
     if not logged_in:
         logger.error(f"Credentials check failed: {msg}")
